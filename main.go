@@ -3,14 +3,14 @@ package main
 import (
 	"nofx/api"
 	"nofx/auth"
-	"nofx/backtest"
 	"nofx/config"
 	"nofx/crypto"
-	"nofx/experience"
 	"nofx/logger"
 	"nofx/manager"
-	"nofx/mcp"
+	_ "nofx/mcp/payment"
+	_ "nofx/mcp/provider"
 	"nofx/store"
+	"nofx/telemetry"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,6 +21,14 @@ import (
 )
 
 func main() {
+	// Local admin subcommands (account recovery) run directly against the
+	// database and never start the HTTP server. Recovery therefore requires
+	// shell/file access to the host instead of a network request, which keeps
+	// it safe even when NOFX is exposed to the public internet. See cli.go.
+	if runCLISubcommand(os.Args[1:]) {
+		return
+	}
+
 	// Load .env environment variables
 	_ = godotenv.Load()
 
@@ -31,8 +39,9 @@ func main() {
 	logger.Info("║           🚀 NOFX - AI-Powered Trading System              ║")
 	logger.Info("╚════════════════════════════════════════════════════════════╝")
 
-	// Initialize global configuration (loaded from .env)
-	config.Init()
+	// Initialize global configuration (loaded from .env).
+	// MustInit refuses to start under an insecure config (e.g. missing or default JWT_SECRET).
+	config.MustInit()
 	cfg := config.Get()
 	logger.Info("✅ Configuration loaded")
 
@@ -78,7 +87,6 @@ func main() {
 		logger.Fatalf("❌ Failed to initialize database: %v", err)
 	}
 	defer st.Close()
-	backtest.UseDatabase(st.DB())
 
 	// Initialize installation ID for experience improvement (anonymous statistics)
 	initInstallationID(st)
@@ -95,13 +103,8 @@ func main() {
 	// time.Sleep(500 * time.Millisecond)
 	logger.Info("📊 Using CoinAnk API for all market data (WebSocket cache disabled)")
 
-	// Create TraderManager and BacktestManager
+	// Create TraderManager
 	traderManager := manager.NewTraderManager()
-	mcpClient := newSharedMCPClient()
-	backtestManager := backtest.NewManager(mcpClient)
-	if err := backtestManager.RestoreRuns(); err != nil {
-		logger.Warnf("⚠️ Failed to restore backtest history: %v", err)
-	}
 
 	// Load all traders from database to memory (may auto-start traders with IsRunning=true)
 	if err := traderManager.LoadTradersFromStore(st); err != nil {
@@ -123,13 +126,18 @@ func main() {
 			if t.IsRunning {
 				status = "✅ Running"
 			}
+			idShort := t.ID
+			if len(idShort) > 8 {
+				idShort = idShort[:8]
+			}
 			logger.Infof("  • %s [%s] %s - AI Model: %s, Exchange: %s",
-				t.Name, t.ID[:8], status, t.AIModelID, t.ExchangeID)
+				t.Name, idShort, status, t.AIModelID, t.ExchangeID)
 		}
 	}
 
 	// Start API server
-	server := api.NewServer(traderManager, st, cryptoService, backtestManager, cfg.APIServerPort)
+	server := api.NewServer(traderManager, st, cryptoService, cfg.APIServerPort)
+
 	go func() {
 		if err := server.Start(); err != nil {
 			logger.Fatalf("❌ Failed to start API server: %v", err)
@@ -146,19 +154,16 @@ func main() {
 	<-quit
 	logger.Info("📴 Shutdown signal received, closing system...")
 
+	if err := server.Shutdown(); err != nil {
+		logger.Warnf("⚠️ HTTP server shutdown error: %v", err)
+	}
+	logger.Info("✅ HTTP server stopped")
+
+	// nofxiAgent.Stop() is handled by defer above
+
 	// Stop all traders
 	traderManager.StopAll()
 	logger.Info("✅ System shut down safely")
-}
-
-// newSharedMCPClient creates a shared MCP AI client (for backtesting)
-func newSharedMCPClient() mcp.AIClient {
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
-	if apiKey == "" {
-		logger.Warn("⚠️ DEEPSEEK_API_KEY not set, AI features will be unavailable")
-		return nil
-	}
-	return mcp.NewDeepSeekClient()
 }
 
 // initInstallationID initializes the anonymous installation ID for experience improvement
@@ -182,5 +187,5 @@ func initInstallationID(st *store.Store) {
 	}
 
 	// Set installation ID in experience module
-	experience.SetInstallationID(installationID)
+	telemetry.SetInstallationID(installationID)
 }

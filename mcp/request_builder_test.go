@@ -1,8 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 )
 
 // ============================================================
@@ -342,6 +347,110 @@ func TestClient_CallWithRequest_Success(t *testing.T) {
 	}
 }
 
+func TestClient_CallWithRequest_AttachesRequestContextToHTTP(t *testing.T) {
+	type contextKey string
+	const key contextKey = "stage"
+	ctx := context.WithValue(context.Background(), key, "planner")
+
+	mockHTTP := NewMockHTTPClient()
+	mockHTTP.ResponseFunc = func(req *http.Request) (*http.Response, error) {
+		if req.Context().Value(key) != "planner" {
+			t.Fatalf("expected HTTP request to inherit mcp.Request context")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"}}]}`)),
+			Header:     make(http.Header),
+		}, nil
+	}
+
+	client := NewClient(
+		WithHTTPClient(mockHTTP.ToHTTPClient()),
+		WithLogger(NewMockLogger()),
+		WithAPIKey("sk-test-key"),
+	)
+	request := NewRequestBuilder().WithUserPrompt("Hello").MustBuild()
+	request.Ctx = ctx
+
+	result, err := client.CallWithRequest(request)
+	if err != nil {
+		t.Fatalf("should not error: %v", err)
+	}
+	if result != "ok" {
+		t.Fatalf("expected ok, got %q", result)
+	}
+}
+
+func TestClient_CallWithRequest_RetrySleepStopsWhenContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	mockHTTP := NewMockHTTPClient()
+	mockHTTP.SetNetworkError(io.EOF)
+	client := NewClient(
+		WithHTTPClient(mockHTTP.ToHTTPClient()),
+		WithLogger(NewMockLogger()),
+		WithAPIKey("sk-test-key"),
+		WithMaxRetries(2),
+		WithRetryWaitBase(time.Hour),
+	)
+	request := NewRequestBuilder().WithUserPrompt("Hello").MustBuild()
+	request.Ctx = ctx
+
+	start := time.Now()
+	_, err := client.CallWithRequest(request)
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("expected context canceled during retry wait, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("retry sleep did not respect context cancellation, elapsed=%v", elapsed)
+	}
+	if got := len(mockHTTP.GetRequests()); got != 1 {
+		t.Fatalf("expected no retry after context cancellation, got %d requests", got)
+	}
+}
+
+func TestClient_CallWithRequest_RetriesUpstreamEmptyOutput(t *testing.T) {
+	mockHTTP := NewMockHTTPClient()
+	attempts := 0
+	mockHTTP.ResponseFunc = func(req *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			body := `{"error":{"code":"upstream_empty_output","message":"Upstream model returned empty output.","type":"rate_limit_error"}}`
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok after retry"}}]}`)),
+			Header:     make(http.Header),
+		}, nil
+	}
+
+	client := NewClient(
+		WithHTTPClient(mockHTTP.ToHTTPClient()),
+		WithLogger(NewMockLogger()),
+		WithAPIKey("sk-test-key"),
+		WithMaxRetries(2),
+		WithRetryWaitBase(time.Millisecond),
+	)
+	request := NewRequestBuilder().WithUserPrompt("Hello").MustBuild()
+
+	result, err := client.CallWithRequest(request)
+	if err != nil {
+		t.Fatalf("should retry upstream empty output and succeed: %v", err)
+	}
+	if result != "ok after retry" {
+		t.Fatalf("expected retry result, got %q", result)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+}
+
 func TestClient_CallWithRequest_MultiRound(t *testing.T) {
 	mockHTTP := NewMockHTTPClient()
 	mockHTTP.SetSuccessResponse("Multi-round response")
@@ -450,10 +559,10 @@ func TestClient_CallWithRequest_UsesClientModel(t *testing.T) {
 	mockHTTP.SetSuccessResponse("Response")
 	mockLogger := NewMockLogger()
 
-	client := NewDeepSeekClientWithOptions(
+	client := NewClient(
+		WithDeepSeekConfig("sk-test-key"),
 		WithHTTPClient(mockHTTP.ToHTTPClient()),
 		WithLogger(mockLogger),
-		WithAPIKey("sk-test-key"),
 	)
 
 	// Request does not set model, should use Client's model

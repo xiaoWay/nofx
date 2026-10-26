@@ -4,9 +4,7 @@
 package nofxos
 
 import (
-	"io/ioutil"
-	"net/http"
-	"nofx/security"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -16,15 +14,18 @@ import (
 const (
 	DefaultBaseURL = "https://nofxos.ai"
 	DefaultTimeout = 30 * time.Second
-	DefaultAuthKey = "cm_568c67eae410d912c54c"
+	// Deprecated: data access requires an explicitly configured Claw402 wallet.
+	DefaultAuthKey = ""
 )
 
 // Client is the NofxOS API client
 type Client struct {
-	BaseURL string
-	AuthKey string
-	Timeout time.Duration
-	mu      sync.RWMutex
+	BaseURL    string
+	AuthKey    string
+	Timeout    time.Duration
+	mu         sync.RWMutex
+	claw402    *Claw402DataClient // If set, routes requests through claw402
+	gatewayErr error              // fail closed when automatic paid-client setup fails
 }
 
 var (
@@ -35,11 +36,7 @@ var (
 // DefaultClient returns the singleton default client
 func DefaultClient() *Client {
 	clientOnce.Do(func() {
-		defaultClient = &Client{
-			BaseURL: DefaultBaseURL,
-			AuthKey: DefaultAuthKey,
-			Timeout: DefaultTimeout,
-		}
+		defaultClient = ResolveClient("")
 	})
 	return defaultClient
 }
@@ -57,6 +54,14 @@ func NewClient(baseURL, authKey string) *Client {
 		AuthKey: authKey,
 		Timeout: DefaultTimeout,
 	}
+}
+
+// SetClaw402 enables routing requests through claw402 payment gateway.
+func (c *Client) SetClaw402(claw402Client *Claw402DataClient) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.claw402 = claw402Client
+	c.gatewayErr = nil
 }
 
 // SetConfig updates client configuration
@@ -85,42 +90,19 @@ func (c *Client) GetAuthKey() string {
 	return c.AuthKey
 }
 
-// doRequest performs an HTTP GET request with authentication
+// doRequest requires the paid gateway, including for legacy constructor callers.
+// A supplied origin URL/auth key must never enable a payment bypass.
 func (c *Client) doRequest(endpoint string) ([]byte, error) {
 	c.mu.RLock()
-	baseURL := c.BaseURL
-	authKey := c.AuthKey
-	timeout := c.Timeout
+	paid, gatewayErr := c.claw402, c.gatewayErr
 	c.mu.RUnlock()
-
-	url := baseURL + endpoint
-	if !strings.Contains(url, "auth=") {
-		if strings.Contains(url, "?") {
-			url += "&auth=" + authKey
-		} else {
-			url += "?auth=" + authKey
-		}
+	if gatewayErr != nil {
+		return nil, gatewayErr
 	}
-
-	resp, err := security.SafeGet(url, timeout)
-	if err != nil {
-		return nil, err
+	if paid == nil {
+		return nil, errors.New("Claw402 paid data routing is required; direct origin access is disabled")
 	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return body, &APIError{
-			StatusCode: resp.StatusCode,
-			Message:    string(body),
-		}
-	}
-
-	return body, nil
+	return paid.DoRequest(endpoint)
 }
 
 // APIError represents an API error response

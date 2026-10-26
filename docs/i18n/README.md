@@ -4,6 +4,10 @@ NOFX documentation is available in multiple languages.
 
 NOFX 文档提供多种语言版本。
 
+The six translated project READMEs follow the [English README](../../README.md): current branding, one-line installation, Frontier, Autopilot, first-use setup and upgrade instructions. Linked technical guides may still be in English.
+
+六个翻译版项目 README 与[英文 README](../../README.md)同步：包含新版品牌、一行安装、Frontier、Autopilot、首次配置和升级说明。链接到的技术指南可能仍为英文。
+
 ---
 
 ## 📚 Available Languages / 可用语言
@@ -12,8 +16,11 @@ NOFX 文档提供多种语言版本。
 |----------|-------------|--------|-------------|
 | 🇬🇧 **English** | [README.md](../../README.md) | ✅ Complete | Core Team |
 | 🇨🇳 **Chinese (中文)** | [README.md](zh-CN/README.md) | ✅ Complete | Community |
+| 🇯🇵 **Japanese (日本語)** | [README.md](ja/README.md) | ✅ Complete | Community |
+| 🇰🇷 **Korean (한국어)** | [README.md](ko/README.md) | ✅ Complete | Community |
 | 🇷🇺 **Russian (Русский)** | [README.md](ru/README.md) | ✅ Complete | Community |
 | 🇺🇦 **Ukrainian (Українська)** | [README.md](uk/README.md) | ✅ Complete | Community |
+| 🇻🇳 **Vietnamese (Tiếng Việt)** | [README.md](vi/README.md) | ✅ Complete | Community |
 
 ---
 
@@ -26,9 +33,19 @@ NOFX 文档提供多种语言版本。
 
 ### 中文 🇨🇳
 - **主 README:** [zh-CN/README.md](zh-CN/README.md)
-- **贡献指南:** [../../CONTRIBUTING.md](../../CONTRIBUTING.md#中文)
-- **安全政策:** [../../SECURITY.md](../../SECURITY.md#中文)
+- **贡献指南:** [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
+- **安全政策:** [../../SECURITY.md](../../SECURITY.md)
 - **常见问题:** [../guides/faq.zh-CN.md](../guides/faq.zh-CN.md)
+
+### 日本語 🇯🇵
+- **メイン README:** [ja/README.md](ja/README.md)
+- **Contributing:** [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
+- **Security:** [../../SECURITY.md](../../SECURITY.md)
+
+### 한국어 🇰🇷
+- **메인 README:** [ko/README.md](ko/README.md)
+- **Contributing:** [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
+- **Security:** [../../SECURITY.md](../../SECURITY.md)
 
 ### Русский 🇷🇺
 - **Основной README:** [ru/README.md](ru/README.md)
@@ -40,6 +57,11 @@ NOFX 文档提供多种语言版本。
 - **Посібник із внесків:** [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
 - **Політика безпеки:** [../../SECURITY.md](../../SECURITY.md)
 
+### Tiếng Việt 🇻🇳
+- **README chính:** [vi/README.md](vi/README.md)
+- **Contributing:** [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
+- **Security:** [../../SECURITY.md](../../SECURITY.md)
+
 ---
 
 ## 🤝 Help with Translations / 帮助翻译
@@ -49,7 +71,7 @@ NOFX 文档提供多种语言版本。
 We welcome translation contributions! / 我们欢迎翻译贡献！
 
 **What needs translation? / 需要翻译什么？**
-- ✅ Main README (complete for 4 languages)
+- ✅ Main README (complete for 7 languages)
 - 🚧 Deployment guides (partial)
 - 📋 User guides (needed)
 - 📋 Contributing guide (needed for RU/UK)
@@ -94,10 +116,11 @@ faq.zh-CN.md                 → Chinese FAQ
 **Language Codes:**
 - `en` - English (default, no suffix needed)
 - `zh-CN` - Simplified Chinese
+- `ja` - Japanese
+- `ko` - Korean
 - `ru` - Russian
 - `uk` - Ukrainian
-- `ja` - Japanese *(future)*
-- `ko` - Korean *(future)*
+- `vi` - Vietnamese
 
 ### Quality Standards / 质量标准
 
@@ -107,6 +130,10 @@ faq.zh-CN.md                 → Chinese FAQ
 - ✅ Consistent terminology
 - ✅ Preserved formatting (markdown)
 - ✅ Working internal links
+
+For project READMEs, keep the one-line installer near the top and outside collapsed sections. Preserve executable commands, partner URLs and product names. Keep the four Frontier entry types and the distinction between per-trade approval and Autopilot execution consistent with the English source.
+
+项目 README 的一行安装命令应保留在靠前位置，不放进折叠区域。保持可执行命令、合作链接和产品名称不变；四种 Frontier 入场方式，以及逐笔批准与 Autopilot 自动执行的区别，都应与英文版一致。
 
 **Avoid / 避免:**
 - ❌ Machine translation without review
@@ -152,8 +179,6 @@ faq.zh-CN.md                 → Chinese FAQ
 
 | Language | Status | Need Volunteers? |
 |----------|--------|------------------|
-| 🇯🇵 Japanese | 📋 Planned | ✅ Yes |
-| 🇰🇷 Korean | 📋 Planned | ✅ Yes |
 | 🇪🇸 Spanish | 📋 Planned | ✅ Yes |
 | 🇫🇷 French | 📋 Planned | ✅ Yes |
 | 🇩🇪 German | 📋 Planned | ✅ Yes |

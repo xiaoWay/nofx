@@ -18,16 +18,18 @@ type Store struct {
 	driver *DBDriver // Database driver for abstraction (legacy)
 
 	// Sub-stores (lazy initialization)
-	user     *UserStore
-	aiModel  *AIModelStore
-	exchange *ExchangeStore
-	trader   *TraderStore
-	decision *DecisionStore
-	backtest *BacktestStore
-	position *PositionStore
-	strategy *StrategyStore
-	equity   *EquityStore
-	order    *OrderStore
+	user           *UserStore
+	aiModel        *AIModelStore
+	exchange       *ExchangeStore
+	trader         *TraderStore
+	decision       *DecisionStore
+	position       *PositionStore
+	strategy       *StrategyStore
+	equity         *EquityStore
+	order          *OrderStore
+	grid           *GridStore
+	aiCharge       *AIChargeStore
+	telegramConfig TelegramConfigStore
 
 	mu sync.RWMutex
 }
@@ -141,9 +143,6 @@ func (s *Store) initTables() error {
 	if err := s.Decision().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize decision log tables: %w", err)
 	}
-	if err := s.Backtest().initTables(); err != nil {
-		return fmt.Errorf("failed to initialize backtest tables: %w", err)
-	}
 	if err := s.Position().InitTables(); err != nil {
 		return fmt.Errorf("failed to initialize position tables: %w", err)
 	}
@@ -155,6 +154,15 @@ func (s *Store) initTables() error {
 	}
 	if err := s.Order().InitTables(); err != nil {
 		return fmt.Errorf("failed to initialize order tables: %w", err)
+	}
+	if err := s.Grid().InitTables(); err != nil {
+		return fmt.Errorf("failed to initialize grid tables: %w", err)
+	}
+	if err := s.TelegramConfig().(*telegramConfigStore).initTables(); err != nil {
+		return fmt.Errorf("failed to initialize telegram config tables: %w", err)
+	}
+	if err := s.AICharge().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize AI charge tables: %w", err)
 	}
 	return nil
 }
@@ -229,16 +237,6 @@ func (s *Store) Decision() *DecisionStore {
 	return s.decision
 }
 
-// Backtest gets backtest data storage
-func (s *Store) Backtest() *BacktestStore {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.backtest == nil {
-		s.backtest = NewBacktestStore(s.gdb)
-	}
-	return s.backtest
-}
-
 // Position gets position storage
 func (s *Store) Position() *PositionStore {
 	s.mu.Lock()
@@ -277,6 +275,36 @@ func (s *Store) Order() *OrderStore {
 		s.order = NewOrderStore(s.gdb)
 	}
 	return s.order
+}
+
+// Grid gets grid trading storage
+func (s *Store) Grid() *GridStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.grid == nil {
+		s.grid = NewGridStore(s.gdb)
+	}
+	return s.grid
+}
+
+// AICharge gets AI charge storage
+func (s *Store) AICharge() *AIChargeStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.aiCharge == nil {
+		s.aiCharge = NewAIChargeStore(s.gdb)
+	}
+	return s.aiCharge
+}
+
+// TelegramConfig gets Telegram bot configuration storage
+func (s *Store) TelegramConfig() TelegramConfigStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.telegramConfig == nil {
+		s.telegramConfig = NewTelegramConfigStore(s.gdb)
+	}
+	return s.telegramConfig
 }
 
 // Close closes database connection

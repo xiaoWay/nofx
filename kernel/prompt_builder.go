@@ -6,22 +6,22 @@ import (
 )
 
 // ============================================================================
-// AI Prompt Builder - AI提示词构建器
+// AI Prompt Builder
 // ============================================================================
-// 构建完整的AI提示词，包括系统提示词和用户提示词
+// Builds complete AI prompts including system prompts and user prompts.
 // ============================================================================
 
-// PromptBuilder 提示词构建器
+// PromptBuilder builds AI prompts in the configured language
 type PromptBuilder struct {
 	lang Language
 }
 
-// NewPromptBuilder 创建提示词构建器
+// NewPromptBuilder creates a new prompt builder for the given language
 func NewPromptBuilder(lang Language) *PromptBuilder {
 	return &PromptBuilder{lang: lang}
 }
 
-// BuildSystemPrompt 构建系统提示词
+// BuildSystemPrompt builds the system prompt
 func (pb *PromptBuilder) BuildSystemPrompt() string {
 	if pb.lang == LangChinese {
 		return pb.buildSystemPromptZH()
@@ -29,55 +29,55 @@ func (pb *PromptBuilder) BuildSystemPrompt() string {
 	return pb.buildSystemPromptEN()
 }
 
-// BuildUserPrompt 构建用户提示词（包含完整的交易上下文）
+// BuildUserPrompt builds the user prompt with full trading context
 func (pb *PromptBuilder) BuildUserPrompt(ctx *Context) string {
-	// 使用Formatter格式化交易上下文
+	// Use Formatter to format the trading context
 	formattedData := FormatContextForAI(ctx, pb.lang)
 
-	// 添加决策要求
+	// Append decision requirements
 	if pb.lang == LangChinese {
 		return formattedData + pb.getDecisionRequirementsZH()
 	}
 	return formattedData + pb.getDecisionRequirementsEN()
 }
 
-// ========== 中文提示词 ==========
+// ========== Chinese Prompts (translated to English) ==========
 
 func (pb *PromptBuilder) buildSystemPromptZH() string {
-	return `你是一个专业的量化交易AI助手，负责分析市场数据并做出交易决策。
+	return `You are a professional quantitative trading AI assistant, responsible for analyzing market data and making trading decisions.
 
-## 你的任务
+## Your Tasks
 
-1. **分析账户状态**: 评估当前风险水平、保证金使用率、持仓情况
-2. **分析当前持仓**: 判断是否需要止盈、止损、加仓或持有
-3. **分析候选币种**: 评估新的交易机会，结合技术分析和资金流向
-4. **做出决策**: 输出明确的交易决策，包含详细的推理过程
+1. **Analyze account status**: Evaluate current risk level, margin usage, and position status
+2. **Analyze current positions**: Decide whether to take profit, stop loss, add to position, or hold
+3. **Analyze candidate symbols**: Evaluate new trading opportunities, combining technical analysis and capital flow
+4. **Make decisions**: Output clear trading decisions with detailed reasoning
 
-## 决策原则
+## Decision Principles
 
-### 风险优先
-- 保证金使用率不得超过30%
-- 单个持仓亏损达到-5%必须止损
-- 优先保护资本，再考虑盈利
+### Risk First
+- Margin usage must not exceed 30%
+- A single position losing -5% must be stopped out
+- Protect capital first, then consider profit
 
-### 跟踪止盈
-- 当持仓盈亏从峰值回撤30%时，考虑部分或全部止盈
-- 例如：Peak PnL +5%，Current PnL +3.5% → 回撤了30%，应该止盈
+### Trailing Take-Profit
+- When position PnL retraces 30% from its peak, consider partial or full take-profit
+- For example: Peak PnL +5%, Current PnL +3.5% -> retraced 30%, should take profit
 
-### 顺势交易
-- 只在多个时间框架趋势一致时进场
-- 结合持仓量(OI)变化判断资金流向真实性
-- OI增加+价格上涨 = 强多头趋势
-- OI减少+价格上涨 = 空头平仓（可能反转）
+### Trend Following
+- Enter only when multiple timeframes' trends agree
+- Use open interest (OI) change to judge the authenticity of capital flow
+- OI up + price up = strong bullish trend
+- OI down + price up = short covering (possible reversal)
 
-### 分批操作
-- 分批建仓：第一次开仓不超过目标仓位的50%
-- 分批止盈：盈利3%平33%，盈利5%平50%，盈利8%全平
-- 只在盈利仓位上加仓，永远不要追亏损
+### Scaling
+- Scale in: the first open should not exceed 50% of the target position
+- Scale out: at +3% profit close 33%, at +5% close 50%, at +8% close all
+- Only add to profitable positions, never chase losses
 
-## 输出格式要求
+## Output Format Requirements
 
-**必须**使用以下JSON格式输出决策：
+You **must** output decisions in the following JSON format:
 
 ` + "```json" + `
 [
@@ -89,37 +89,37 @@ func (pb *PromptBuilder) buildSystemPromptZH() string {
     "stop_loss": 42000,
     "take_profit": 48000,
     "confidence": 85,
-    "reasoning": "详细的推理过程，说明为什么做出这个决策"
+    "reasoning": "Detailed reasoning explaining why this decision was made"
   }
 ]
 ` + "```" + `
 
-### 字段说明
+### Field Descriptions
 
-- **symbol**: 交易对（必需）
-- **action**: 动作类型（必需）
-  - HOLD: 持有当前仓位
-  - PARTIAL_CLOSE: 部分平仓
-  - FULL_CLOSE: 全部平仓
-  - ADD_POSITION: 在现有仓位上加仓
-  - OPEN_NEW: 开设新仓位
-  - WAIT: 等待，不采取任何行动
-- **leverage**: 杠杆倍数（开新仓时必需）
-- **position_size_usd**: 仓位大小（USDT，开新仓时必需）
-- **stop_loss**: 止损价格（开新仓时建议提供）
-- **take_profit**: 止盈价格（开新仓时建议提供）
-- **confidence**: 信心度（0-100）
-- **reasoning**: 推理过程（必需，必须详细说明决策依据）
+- **symbol**: trading pair (required)
+- **action**: action type (required)
+  - HOLD: hold the current position
+  - PARTIAL_CLOSE: partially close the position
+  - FULL_CLOSE: fully close the position
+  - ADD_POSITION: add to an existing position
+  - OPEN_NEW: open a new position
+  - WAIT: wait, take no action
+- **leverage**: leverage multiple (required when opening a new position)
+- **position_size_usd**: position size (USDT, required when opening a new position)
+- **stop_loss**: stop-loss price (recommended when opening a new position)
+- **take_profit**: take-profit price (recommended when opening a new position)
+- **confidence**: confidence level (0-100)
+- **reasoning**: reasoning (required, must explain the decision basis in detail)
 
-## 重要提醒
+## Important Reminders
 
-1. **永远不要**混淆已实现盈亏和未实现盈亏
-2. **永远记得**考虑杠杆对盈亏的放大作用
-3. **永远关注**Peak PnL，这是判断止盈的关键指标
-4. **永远结合**持仓量(OI)变化来判断趋势真实性
-5. **永远遵守**风险管理规则，保护资本是第一位的
+1. **Never** confuse realized PnL with unrealized PnL
+2. **Always remember** to account for leverage amplifying PnL
+3. **Always watch** Peak PnL, the key metric for take-profit decisions
+4. **Always combine** open interest (OI) change to judge trend authenticity
+5. **Always follow** risk management rules; protecting capital comes first
 
-现在，请仔细分析接下来提供的交易数据，并做出专业的决策。`
+Now, carefully analyze the trading data provided next and make a professional decision.`
 }
 
 func (pb *PromptBuilder) getDecisionRequirementsZH() string {
@@ -127,30 +127,30 @@ func (pb *PromptBuilder) getDecisionRequirementsZH() string {
 
 ---
 
-## 📝 现在请做出决策
+## 📝 Now Make Your Decision
 
-### 决策步骤
+### Decision Steps
 
-1. **分析账户风险**:
-   - 当前保证金使用率是否在安全范围？
-   - 是否有足够资金开新仓？
+1. **Analyze account risk**:
+   - Is the current margin usage within a safe range?
+   - Is there enough capital to open new positions?
 
-2. **分析现有持仓**（如果有）:
-   - 是否触发止损条件？
-   - 是否触发跟踪止盈条件？
-   - 是否适合加仓？
+2. **Analyze existing positions** (if any):
+   - Are stop-loss conditions triggered?
+   - Are trailing take-profit conditions triggered?
+   - Is it suitable to add to the position?
 
-3. **分析候选币种**（如果有）:
-   - 技术形态是否符合进场条件？
-   - 持仓量变化是否支持趋势？
-   - 多个时间框架是否共振？
+3. **Analyze candidate symbols** (if any):
+   - Does the technical pattern meet entry conditions?
+   - Does the open interest change support the trend?
+   - Do multiple timeframes resonate?
 
-4. **输出决策**:
-   - 使用规定的JSON格式
-   - 提供详细的推理过程
-   - 给出明确的行动指令
+4. **Output the decision**:
+   - Use the specified JSON format
+   - Provide detailed reasoning
+   - Give clear action instructions
 
-### 输出示例
+### Output Example
 
 ` + "```json" + `
 [
@@ -158,7 +158,7 @@ func (pb *PromptBuilder) getDecisionRequirementsZH() string {
     "symbol": "PIPPINUSDT",
     "action": "PARTIAL_CLOSE",
     "confidence": 85,
-    "reasoning": "当前PnL +2.96%，接近历史峰值+2.99%（回撤仅0.03%）。建议部分平仓锁定利润，因为：1) 持仓时间仅11分钟，已获得3%收益；2) 5分钟K线显示价格接近短期阻力位；3) 成交量开始萎缩，上涨动能减弱。建议平仓50%，剩余仓位设置跟踪止盈在峰值回撤20%处。"
+    "reasoning": "Current PnL +2.96%, close to the all-time peak +2.99% (only 0.03% retracement). Recommend partial close to lock in profit because: 1) holding time is only 11 minutes with 3% gain already; 2) the 5-minute candle shows price near short-term resistance; 3) volume is starting to shrink and upward momentum is weakening. Recommend closing 50%, with the remaining position set to a trailing take-profit at 20% retracement from peak."
   },
   {
     "symbol": "HUSDT",
@@ -168,15 +168,15 @@ func (pb *PromptBuilder) getDecisionRequirementsZH() string {
     "stop_loss": 0.1560,
     "take_profit": 0.1720,
     "confidence": 75,
-    "reasoning": "HUSDT在5分钟时间框架突破关键阻力位0.1630，持仓量1小时内增加+1.57M (+0.89%)，配合价格上涨+4.92%，符合'OI增加+价格上涨'的强多头模式。15分钟和1小时时间框架均呈现上涨趋势，多周期共振。建议开仓做多，止损设在突破点下方-5%，止盈目标+8%。"
+    "reasoning": "HUSDT broke the key resistance 0.1630 on the 5-minute timeframe, open interest increased +1.57M (+0.89%) within 1 hour, together with a price rise of +4.92%, matching the strong bullish 'OI up + price up' pattern. Both the 15-minute and 1-hour timeframes show an uptrend, multi-period resonance. Recommend opening long, with stop-loss set 5% below the breakout point and take-profit target +8%."
   }
 ]
 ` + "```" + `
 
-**请立即输出你的决策（JSON格式）**:`
+**Output your decision immediately (JSON format)**:`
 }
 
-// ========== 英文提示词 ==========
+// ========== English Prompts ==========
 
 func (pb *PromptBuilder) buildSystemPromptEN() string {
 	return `You are a professional quantitative trading AI assistant responsible for analyzing market data and making trading decisions.
@@ -311,9 +311,9 @@ func (pb *PromptBuilder) getDecisionRequirementsEN() string {
 **Please output your decision (JSON format) immediately**:`
 }
 
-// ========== 辅助函数 ==========
+// ========== Helper Functions ==========
 
-// FormatDecisionExample 格式化决策示例（用于文档）
+// FormatDecisionExample formats a decision example (for documentation)
 func FormatDecisionExample(lang Language) string {
 	example := Decision{
 		Symbol:          "BTCUSDT",
@@ -323,32 +323,32 @@ func FormatDecisionExample(lang Language) string {
 		StopLoss:        42000,
 		TakeProfit:      48000,
 		Confidence:      85,
-		Reasoning:       "详细的推理过程...",
+		Reasoning:       "Detailed reasoning process...",
 	}
 
 	data, _ := json.MarshalIndent([]Decision{example}, "", "  ")
 	return string(data)
 }
 
-// ValidateDecisionFormat 验证决策格式是否正确
+// ValidateDecisionFormat validates that the decision format is correct
 func ValidateDecisionFormat(decisions []Decision) error {
 	if len(decisions) == 0 {
-		return fmt.Errorf("决策列表不能为空")
+		return fmt.Errorf("decision list cannot be empty")
 	}
 
 	for i, d := range decisions {
-		// 必需字段检查
+		// Required field checks
 		if d.Symbol == "" {
-			return fmt.Errorf("决策#%d: symbol不能为空", i+1)
+			return fmt.Errorf("decision #%d: symbol cannot be empty", i+1)
 		}
 		if d.Action == "" {
-			return fmt.Errorf("决策#%d: action不能为空", i+1)
+			return fmt.Errorf("decision #%d: action cannot be empty", i+1)
 		}
 		if d.Reasoning == "" {
-			return fmt.Errorf("决策#%d: reasoning不能为空", i+1)
+			return fmt.Errorf("decision #%d: reasoning cannot be empty", i+1)
 		}
 
-		// 动作类型检查
+		// Action type validation
 		validActions := map[string]bool{
 			"HOLD":          true,
 			"PARTIAL_CLOSE": true,
@@ -358,16 +358,16 @@ func ValidateDecisionFormat(decisions []Decision) error {
 			"WAIT":          true,
 		}
 		if !validActions[d.Action] {
-			return fmt.Errorf("决策#%d: 无效的action类型: %s", i+1, d.Action)
+			return fmt.Errorf("decision #%d: invalid action type: %s", i+1, d.Action)
 		}
 
-		// 开新仓位的必需参数检查
+		// Required parameters for opening new positions
 		if d.Action == "OPEN_NEW" {
 			if d.Leverage == 0 {
-				return fmt.Errorf("决策#%d: OPEN_NEW动作需要提供leverage", i+1)
+				return fmt.Errorf("decision #%d: OPEN_NEW action requires leverage", i+1)
 			}
 			if d.PositionSizeUSD == 0 {
-				return fmt.Errorf("决策#%d: OPEN_NEW动作需要提供position_size_usd", i+1)
+				return fmt.Errorf("decision #%d: OPEN_NEW action requires position_size_usd", i+1)
 			}
 		}
 	}

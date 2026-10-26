@@ -1,12 +1,9 @@
+import FlowLanding from '../components/landing/FlowLanding'
 import { useState } from 'react'
-import HeaderBar from '../components/HeaderBar'
+import HeaderBar from '../components/common/HeaderBar'
 import LoginModal from '../components/landing/LoginModal'
-import { LoginRequiredOverlay } from '../components/LoginRequiredOverlay'
+import { LoginRequiredOverlay } from '../components/auth/LoginRequiredOverlay'
 import FooterSection from '../components/landing/FooterSection'
-import TerminalHero from '../components/landing/core/TerminalHero'
-import LiveFeed from '../components/landing/core/LiveFeed'
-import AgentGrid from '../components/landing/core/AgentGrid'
-import DeploymentHub from '../components/landing/core/DeploymentHub'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
 
@@ -34,32 +31,9 @@ export function LandingPage() {
         user={user}
         onLogout={logout}
         onLoginRequired={handleLoginRequired}
-        onPageChange={(page) => {
-          const pathMap: Record<string, string> = {
-            'competition': '/competition',
-            'strategy-market': '/strategy-market',
-            'traders': '/traders',
-            'trader': '/dashboard',
-            'backtest': '/backtest',
-            'strategy': '/strategy',
-            'debate': '/debate',
-            'faq': '/faq',
-          }
-          const path = pathMap[page]
-          if (path) {
-            window.location.href = path
-          }
-        }}
       />
-      <div className="min-h-screen bg-nofx-bg text-nofx-text font-sans selection:bg-nofx-gold selection:text-black">
-
-        <TerminalHero />
-
-        <LiveFeed />
-
-        <AgentGrid />
-
-        <DeploymentHub />
+      <div className="min-h-screen bg-nofx-bg text-nofx-text font-sans selection:bg-nofx-gold selection:text-nofx-bg">
+        <FlowLanding />
 
         <FooterSection language={language} />
 

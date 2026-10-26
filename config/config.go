@@ -1,12 +1,22 @@
 package config
 
 import (
-	"nofx/experience"
+	"fmt"
 	"nofx/mcp"
+	"nofx/telemetry"
 	"os"
 	"strconv"
 	"strings"
 )
+
+// insecureDefaultJWTSecret is the historical fallback value. Refusing to boot when
+// JWT_SECRET matches it (or is missing) prevents the server from silently signing
+// tokens with a well-known secret.
+const insecureDefaultJWTSecret = "default-jwt-secret-change-in-production"
+
+// minJWTSecretLength is the minimum byte length we accept for HS256 signing keys.
+// HS256 keys shorter than 32 bytes are brute-forceable.
+const minJWTSecretLength = 32
 
 // Global configuration instance
 var global *Config
@@ -15,10 +25,8 @@ var global *Config
 // Only contains truly global config, trading related config is at trader/strategy level
 type Config struct {
 	// Service configuration
-	APIServerPort       int
-	JWTSecret           string
-	RegistrationEnabled bool
-	MaxUsers            int // Maximum number of users allowed (0 = unlimited, default = 10)
+	APIServerPort int
+	JWTSecret     string
 
 	// Database configuration
 	DBType     string // sqlite or postgres
@@ -44,14 +52,29 @@ type Config struct {
 	AlpacaAPIKey    string // Alpaca API key for US stocks
 	AlpacaSecretKey string // Alpaca secret key
 	TwelveDataKey   string // TwelveData API key for forex & metals
+
 }
 
-// Init initializes global configuration (from .env)
+// MustInit initializes global configuration or panics. Use from main() so the
+// process refuses to start under an insecure config (e.g. default JWT secret).
+func MustInit() {
+	if err := initConfig(); err != nil {
+		panic(fmt.Sprintf("config: %v", err))
+	}
+}
+
+// Init initializes global configuration (from .env). Prefer MustInit from main.
 func Init() {
+	if err := initConfig(); err != nil {
+		// Preserve historical fail-soft behavior for non-main callers (tests, tools);
+		// the process can still observe the error via Get() returning nil.
+		fmt.Fprintf(os.Stderr, "config init failed: %v\n", err)
+	}
+}
+
+func initConfig() error {
 	cfg := &Config{
 		APIServerPort:         8080,
-		RegistrationEnabled:   true,
-		MaxUsers:              10,   // Default: 10 users allowed
 		ExperienceImprovement: true, // Default: enabled to help improve the product
 		// Database defaults
 		DBType:    "sqlite",
@@ -68,17 +91,13 @@ func Init() {
 		cfg.JWTSecret = strings.TrimSpace(v)
 	}
 	if cfg.JWTSecret == "" {
-		cfg.JWTSecret = "default-jwt-secret-change-in-production"
+		return fmt.Errorf("JWT_SECRET is required (set a random %d+ byte value in .env)", minJWTSecretLength)
 	}
-
-	if v := os.Getenv("REGISTRATION_ENABLED"); v != "" {
-		cfg.RegistrationEnabled = strings.ToLower(v) == "true"
+	if cfg.JWTSecret == insecureDefaultJWTSecret {
+		return fmt.Errorf("JWT_SECRET matches the insecure default; generate a fresh random value (e.g. `openssl rand -base64 48`)")
 	}
-
-	if v := os.Getenv("MAX_USERS"); v != "" {
-		if maxUsers, err := strconv.Atoi(v); err == nil && maxUsers >= 0 {
-			cfg.MaxUsers = maxUsers
-		}
+	if len(cfg.JWTSecret) < minJWTSecretLength {
+		return fmt.Errorf("JWT_SECRET must be at least %d bytes (got %d); generate via `openssl rand -base64 48`", minJWTSecretLength, len(cfg.JWTSecret))
 	}
 
 	if v := os.Getenv("API_SERVER_PORT"); v != "" {
@@ -135,17 +154,19 @@ func Init() {
 	global = cfg
 
 	// Initialize experience improvement (installation ID will be set after database init)
-	experience.Init(cfg.ExperienceImprovement, "")
+	telemetry.Init(cfg.ExperienceImprovement, "")
 
 	// Set up AI token usage tracking callback
 	mcp.TokenUsageCallback = func(usage mcp.TokenUsage) {
-		experience.TrackAIUsage(experience.AIUsageEvent{
+		telemetry.TrackAIUsage(telemetry.AIUsageEvent{
 			ModelProvider: usage.Provider,
 			ModelName:     usage.Model,
+			Channel:       usage.Channel(),
 			InputTokens:   usage.PromptTokens,
 			OutputTokens:  usage.CompletionTokens,
 		})
 	}
+	return nil
 }
 
 // Get returns the global configuration

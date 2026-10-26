@@ -26,7 +26,7 @@ type Trader struct {
 	ExchangeID          string    `gorm:"column:exchange_id;not null" json:"exchange_id"`
 	StrategyID          string    `gorm:"column:strategy_id;default:''" json:"strategy_id"`
 	InitialBalance      float64   `gorm:"column:initial_balance;not null" json:"initial_balance"`
-	ScanIntervalMinutes int       `gorm:"column:scan_interval_minutes;default:3" json:"scan_interval_minutes"`
+	ScanIntervalMinutes int       `gorm:"column:scan_interval_minutes;default:15" json:"scan_interval_minutes"`
 	IsRunning           bool      `gorm:"column:is_running;default:false" json:"is_running"`
 	IsCrossMargin       bool      `gorm:"column:is_cross_margin;default:true" json:"is_cross_margin"`
 	ShowInCompetition   bool      `gorm:"column:show_in_competition;default:true" json:"show_in_competition"`
@@ -110,12 +110,20 @@ func (s *TraderStore) Update(trader *Trader) error {
 		trader.ID, trader.Name, trader.AIModelID, trader.StrategyID)
 
 	updates := map[string]interface{}{
-		"name":           trader.Name,
-		"ai_model_id":    trader.AIModelID,
-		"exchange_id":    trader.ExchangeID,
-		"strategy_id":    trader.StrategyID,
-		"is_cross_margin": trader.IsCrossMargin,
-		"show_in_competition": trader.ShowInCompetition,
+		"name":                   trader.Name,
+		"ai_model_id":            trader.AIModelID,
+		"exchange_id":            trader.ExchangeID,
+		"strategy_id":            trader.StrategyID,
+		"is_cross_margin":        trader.IsCrossMargin,
+		"show_in_competition":    trader.ShowInCompetition,
+		"btc_eth_leverage":       trader.BTCETHLeverage,
+		"altcoin_leverage":       trader.AltcoinLeverage,
+		"trading_symbols":        trader.TradingSymbols,
+		"use_coin_pool":          trader.UseAI500,
+		"use_oi_top":             trader.UseOITop,
+		"custom_prompt":          trader.CustomPrompt,
+		"override_base_prompt":   trader.OverrideBasePrompt,
+		"system_prompt_template": trader.SystemPromptTemplate,
 	}
 
 	// Only update these if > 0
@@ -243,6 +251,26 @@ func (s *TraderStore) GetByID(traderID string) (*Trader, error) {
 func (s *TraderStore) ListAll() ([]*Trader, error) {
 	var traders []*Trader
 	err := s.db.Order("created_at DESC").Find(&traders).Error
+	if err != nil {
+		return nil, err
+	}
+	return traders, nil
+}
+
+// ListByExchangeID gets traders that use a specific exchange
+func (s *TraderStore) ListByExchangeID(userID, exchangeID string) ([]*Trader, error) {
+	var traders []*Trader
+	err := s.db.Where("user_id = ? AND exchange_id = ?", userID, exchangeID).Find(&traders).Error
+	if err != nil {
+		return nil, err
+	}
+	return traders, nil
+}
+
+// ListByAIModelID gets traders that use a specific AI model
+func (s *TraderStore) ListByAIModelID(userID, aiModelID string) ([]*Trader, error) {
+	var traders []*Trader
+	err := s.db.Where("user_id = ? AND ai_model_id = ?", userID, aiModelID).Find(&traders).Error
 	if err != nil {
 		return nil, err
 	}

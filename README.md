@@ -1,487 +1,296 @@
-# NOFX - Agentic Trading OS
+<p align="center">
+  <img src="docs/assets/nofx-banner.svg" alt="nofx — Intelligence that trades. An open trading system you run yourself." width="100%"/>
+</p>
 
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://golang.org/)
-[![React](https://img.shields.io/badge/React-18+-61DAFB?style=flat&logo=react)](https://reactjs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6?style=flat&logo=typescript)](https://www.typescriptlang.org/)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="#frontier">Frontier</a> ·
+  <a href="#run-locally">Get started</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#community">Community</a>
+</p>
 
-| CONTRIBUTOR AIRDROP PROGRAM |
-|:----------------------------------:|
-| Code · Bug Fixes · Issues → Airdrop |
-| [Learn More](#contributor-airdrop-program) |
+<p align="center">
+  <a href="https://github.com/NoFxAiOS/nofx/stargazers"><img src="https://img.shields.io/github/stars/NoFxAiOS/nofx?style=flat&labelColor=192434&color=295BE8" alt="GitHub stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-295BE8?style=flat&labelColor=192434" alt="License: AGPL-3.0"></a>
+  <a href="https://t.me/nofx_dev_community"><img src="https://img.shields.io/badge/telegram-community-295BE8?style=flat&labelColor=192434&logo=telegram&logoColor=white" alt="Telegram community"></a>
+</p>
 
-**Languages:** [English](README.md) | [中文](docs/i18n/zh-CN/README.md) | [日本語](docs/i18n/ja/README.md) | [한국어](docs/i18n/ko/README.md) | [Русский](docs/i18n/ru/README.md) | [Українська](docs/i18n/uk/README.md) | [Tiếng Việt](docs/i18n/vi/README.md)
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="docs/i18n/zh-CN/README.md">中文</a> ·
+  <a href="docs/i18n/ja/README.md">日本語</a> ·
+  <a href="docs/i18n/ko/README.md">한국어</a> ·
+  <a href="docs/i18n/ru/README.md">Русский</a> ·
+  <a href="docs/i18n/uk/README.md">Українська</a> ·
+  <a href="docs/i18n/vi/README.md">Tiếng Việt</a>
+</p>
 
----
+NOFX is an open-source trading system you run on your own machine. Use **Frontier** to work through a trade with AI, compare entries on a chart and approve the order yourself. Use **Autopilot** to run a strategy continuously. Both use your configured models and exchange accounts.
 
-## AI-Powered Multi-Asset Trading Platform
+Built with [Vergex](https://vergex.trade). AI and data access through [Claw402](https://claw402.ai).
 
-**NOFX** is an open-source AI trading system that lets you run multiple AI models to trade automatically. Configure strategies through a web interface, monitor performance in real-time, and let AI agents compete to find the best trading approach.
+## Run locally
 
-### Supported Markets
+**One-line install — Linux / macOS**
 
-| Market | Trading | Status |
-|--------|---------|--------|
-| 🪙 **Crypto** | BTC, ETH, Altcoins | ✅ Supported |
-| 📈 **US Stocks** | AAPL, TSLA, NVDA, etc. | ✅ Supported |
-| 💱 **Forex** | EUR/USD, GBP/USD, etc. | ✅ Supported |
-| 🥇 **Metals** | Gold, Silver | ✅ Supported |
+Install and start Docker with Compose, then run:
 
-### Core Features
-
-- **Multi-AI Support**: Run DeepSeek, Qwen, GPT, Claude, Gemini, Grok, Kimi - switch models anytime
-- **Multi-Exchange**: Trade on Binance, Bybit, OKX, Bitget, Hyperliquid, Aster DEX, Lighter from one platform
-- **Strategy Studio**: Visual strategy builder with coin sources, indicators, and risk controls
-- **AI Debate Arena**: Multiple AI models debate trading decisions with different roles (Bull, Bear, Analyst)
-- **AI Competition Mode**: Multiple AI traders compete in real-time, track performance side by side
-- **Web-Based Config**: No JSON editing - configure everything through the web interface
-- **Real-Time Dashboard**: Live positions, P/L tracking, AI decision logs with Chain of Thought
-
-### Core Team
-
-- **Tinkle** - [@Web3Tinkle](https://x.com/Web3Tinkle)
-- **Official Twitter** - [@nofx_official](https://x.com/nofx_official)
-
-> **Risk Warning**: This system is experimental. AI auto-trading carries significant risks. Strongly recommended for learning/research purposes or testing with small amounts only!
-
-## Developer Community
-
-Join our Telegram developer community: **[NOFX Developer Community](https://t.me/nofx_dev_community)**
-
----
-
-## Before You Begin
-
-To use NOFX, you'll need:
-
-1. **Exchange Account** - Register on any supported exchange and create API credentials with trading permissions
-2. **AI Model API Key** - Get from any supported provider (DeepSeek recommended for cost-effectiveness)
-
----
-
-## Supported Exchanges
-
-### CEX (Centralized Exchanges)
-
-| Exchange | Status | Register (Fee Discount) |
-|----------|--------|-------------------------|
-| **Binance** | ✅ Supported | [Register](https://www.binance.com/join?ref=NOFXENG) |
-| **Bybit** | ✅ Supported | [Register](https://partner.bybit.com/b/83856) |
-| **OKX** | ✅ Supported | [Register](https://www.okx.com/join/1865360) |
-| **Bitget** | ✅ Supported | [Register](https://www.bitget.com/referral/register?from=referral&clacCode=c8a43172) |
-
-### Perp-DEX (Decentralized Perpetual Exchanges)
-
-| Exchange | Status | Register (Fee Discount) |
-|----------|--------|-------------------------|
-| **Hyperliquid** | ✅ Supported | [Register](https://app.hyperliquid.xyz/join/AITRADING) |
-| **Aster DEX** | ✅ Supported | [Register](https://www.asterdex.com/en/referral/fdfc0e) |
-| **Lighter** | ✅ Supported | [Register](https://app.lighter.xyz/?referral=68151432) |
-
----
-
-## Supported AI Models
-
-| AI Model | Status | Get API Key |
-|----------|--------|-------------|
-| **DeepSeek** | ✅ Supported | [Get API Key](https://platform.deepseek.com) |
-| **Qwen** | ✅ Supported | [Get API Key](https://dashscope.console.aliyun.com) |
-| **OpenAI (GPT)** | ✅ Supported | [Get API Key](https://platform.openai.com) |
-| **Claude** | ✅ Supported | [Get API Key](https://console.anthropic.com) |
-| **Gemini** | ✅ Supported | [Get API Key](https://aistudio.google.com) |
-| **Grok** | ✅ Supported | [Get API Key](https://console.x.ai) |
-| **Kimi** | ✅ Supported | [Get API Key](https://platform.moonshot.cn) |
-
----
-
-## Screenshots
-
-### Config Page
-| AI Models & Exchanges | Traders List |
-|:---:|:---:|
-| <img src="screenshots/config-ai-exchanges.png" width="400" alt="Config - AI Models & Exchanges"/> | <img src="screenshots/config-traders-list.png" width="400" alt="Config - Traders List"/> |
-
-### Competition & Backtest
-| Competition Mode | Backtest Lab |
-|:---:|:---:|
-| <img src="screenshots/competition-page.png" width="400" alt="Competition Page"/> | <img src="screenshots/backtest-lab.png" width="400" alt="Backtest Lab"/> |
-
-### Dashboard
-| Overview | Market Chart |
-|:---:|:---:|
-| <img src="screenshots/dashboard-page.png" width="400" alt="Dashboard Overview"/> | <img src="screenshots/dashboard-market-chart.png" width="400" alt="Dashboard Market Chart"/> |
-
-| Trading Stats | Position History |
-|:---:|:---:|
-| <img src="screenshots/dashboard-trading-stats.png" width="400" alt="Trading Stats"/> | <img src="screenshots/dashboard-position-history.png" width="400" alt="Position History"/> |
-
-| Positions | Trader Details |
-|:---:|:---:|
-| <img src="screenshots/dashboard-positions.png" width="400" alt="Dashboard Positions"/> | <img src="screenshots/details-page.png" width="400" alt="Trader Details"/> |
-
-### Strategy Studio
-| Strategy Editor | Indicators Config |
-|:---:|:---:|
-| <img src="screenshots/strategy-studio.png" width="400" alt="Strategy Studio"/> | <img src="screenshots/strategy-indicators.png" width="400" alt="Strategy Indicators"/> |
-
-### Debate Arena
-| AI Debate Session | Create Debate |
-|:---:|:---:|
-| <img src="screenshots/debate-arena.png" width="400" alt="Debate Arena"/> | <img src="screenshots/debate-create.png" width="400" alt="Create Debate"/> |
-
----
-
-## Quick Start
-
-### One-Click Install (Local/Server)
-
-**Linux / macOS:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
 ```
 
-That's it! Open **http://127.0.0.1:3000** in your browser.
+Open **http://127.0.0.1:3000** in your desktop browser.
 
-### One-Click Cloud Deploy (Railway)
+The installer generates missing environment keys and starts NOFX using published Docker images. No Go or Node.js setup is needed. Continue with [your first session](#your-first-session), or see [source builds and other options](#source-builds-and-other-options).
 
-Deploy to Railway with one click - no server setup required:
+## Frontier
+
+A chart, a conversation and a trade you can inspect before placing it.
+
+1. **Choose a market.** Browse top-volume instruments, search native exchange symbols or use the Binance AI500 list. Stock-linked markets appear where supported by the venue.
+2. **Compare ways to enter.** Request market, limit, weighted ladder and TWAP plans. See entry prices, stop loss, targets, leverage, position value and estimated margin together.
+3. **Review and trade.** Select a plan to focus the chart. Review the current account and order details, then explicitly approve execution.
+4. **Manage the position.** Check live positions and exchange orders below the chart, with controls for manual entries and closing positions.
+
+Frontier supports **Binance USDT perpetuals, Hyperliquid, OKX and Bitget**. You can browse public markets before connecting an execution account; trading requires a matching account. Generating a plan does not submit an order.
+
+| Entry | How it works |
+| :---- | :----------- |
+| **Market** | Enter at the available market price after approval; the displayed entry is an estimate. |
+| **Limit** | Submit an entry at a chosen price. |
+| **Ladder** | Split the position across weighted price levels. |
+| **TWAP** | Release a finite sequence of orders over time, within the approved price limits. |
+
+Limit orders and scheduled slices may remain unfilled. [Execution details and recovery](docs/features/trade-planning.md).
+
+## Autopilot
+
+For strategies you want to run continuously, configure a trader with a model, exchange account and strategy. Autopilot reads the market, makes decisions and routes orders through the NOFX exchange runtime. The Dashboard shows positions, performance and decision history.
+
+**Frontier requires approval for each trade. Autopilot can place trades while it is running.** Starting or stopping Autopilot is a separate action.
+
+| Workspace | What you do there |
+| :-------- | :---------------- |
+| **Config** | Connect models, fund the AI wallet and manage trading accounts. |
+| **Frontier** | Explore markets, compare entry plans and place reviewed orders. |
+| **Dashboard** | Follow your running traders, positions and decision history. |
+| **Strategy** | Configure market selection, indicators, sizing and trading instructions. |
+| **Leaderboard** | Compare published trader performance. |
+
+## Your first session
+
+1. **Create your local account.** Sign in to the instance you just started.
+2. **Set up AI in Config.** Choose a model. With Claw402, create or import an AI fee wallet, save its private key and fund its address with **USDC on Base**. This balance pays for model and paid-data requests.
+3. **Add a trading account.** Connect the exchange you want to use. Check its account equity and available balance. Trading funds stay separate from your AI fee wallet.
+4. **Open Frontier.** Select the exchange, account and market. Generate plans, compare them on the chart and review an order when you are ready.
+
+For continuous trading, configure and start Autopilot separately.
+
+### Updating an installer-based installation
+
+After stopping active Autopilot traders and reviewing any running Frontier execution, run these commands from your installation directory (by default `~/nofx`):
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Keep `.env` and the `data/` directory when upgrading; they contain configuration, encryption material and saved application state.
+
+After restarting, check positions and orders at the exchange and reconcile any execution marked as needing attention before placing another trade. Stopping a process does not close its positions.
+
+## Source builds and other options
+
+<details>
+<summary>Developers: build and update from source</summary>
+
+Use this option when developing NOFX or testing source changes before published images are updated. Install Git and Docker with Compose, and start Docker:
+
+```bash
+git clone --recurse-submodules https://github.com/NoFxAiOS/nofx.git
+cd nofx
+./start.sh start --build
+```
+
+The startup script creates `.env` when needed and generates missing encryption keys. If you cloned without submodules, run `git submodule update --init web/vendor/charting` before building. TradingView chart assets are subject to their applicable license; see [chart integration notes](docs/features/trade-planning.md#harness-chart-and-plugins).
+
+To update a source installation, stop active Autopilot traders and review running Frontier execution, then:
+
+```bash
+git pull --ff-only
+git submodule update --init web/vendor/charting
+./start.sh start --build
+```
+
+</details>
+
+<details>
+<summary>Windows, Railway and remote deployments</summary>
+
+**Windows**
+
+Use Docker Desktop and a Bash environment such as WSL2, then run the one-line installer above.
+
+**Railway**
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/nofx?referralCode=nofx)
 
-After deployment, Railway will provide a public URL to access your NOFX instance.
+**Remote deployments**
 
-### Docker Compose (Manual)
+The installer uses the production Compose configuration, which publishes its ports on all host interfaces by default. The source Compose configuration binds the frontend and API to `127.0.0.1` by default. Configure host bindings and an authenticated HTTPS proxy before exposing a remote instance.
 
-```bash
-# Download and start
-curl -O https://raw.githubusercontent.com/NoFxAiOS/nofx/main/docker-compose.prod.yml
-docker compose -f docker-compose.prod.yml up -d
-```
+</details>
 
-Access Web Interface: **http://127.0.0.1:3000**
+<details>
+<summary>Development without Docker</summary>
 
-```bash
-# Management commands
-docker compose -f docker-compose.prod.yml logs -f    # View logs
-docker compose -f docker-compose.prod.yml restart    # Restart
-docker compose -f docker-compose.prod.yml down       # Stop
-docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d  # Update
-```
-
-### Keeping Updated
-
-> **💡 Updates are frequent.** Run this command daily to stay current with the latest features and fixes:
+Use the Go version specified in [go.mod](go.mod), Node.js 24 as used by the frontend Docker build, and TA-Lib. Initialize the charting submodule before starting the frontend. Configure the environment using [.env.example](.env.example).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
-```
-
-This one-liner pulls the latest official images and restarts services automatically.
-
-### Manual Installation (For Developers)
-
-#### Prerequisites
-
-- **Go 1.21+**
-- **Node.js 18+**
-- **TA-Lib** (technical indicator library)
-
-```bash
-# Install TA-Lib
-# macOS
-brew install ta-lib
-
-# Ubuntu/Debian
-sudo apt-get install libta-lib0-dev
-```
-
-#### Installation Steps
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/NoFxAiOS/nofx.git
-cd nofx
-
-# 2. Install backend dependencies
-go mod download
-
-# 3. Install frontend dependencies
-cd web
-npm install
-cd ..
-
-# 4. Build and start backend
-go build -o nofx
+# Backend
+go build -o nofx .
 ./nofx
 
-# 5. Start frontend (new terminal)
+# Frontend, in a second terminal
 cd web
+npm ci
 npm run dev
 ```
 
-Access Web Interface: **http://127.0.0.1:3000**
+</details>
 
----
+## Models and data
 
-## Windows Installation
+Frontier and Autopilot reuse models configured in NOFX. [Claw402](https://claw402.ai) provides access to multiple models with usage settled in USDC on Base; choose the model in Config and switch it in the workspace.
 
-### Method 1: Docker Desktop (Recommended)
+Exchange prices and candles come from the selected venue. AI500 and supported holder analytics use paid Claw402 routes. Data availability depends on the market and provider: a Hyperliquid holder dataset is not a substitute for Binance, OKX or Bitget data. The activity stream shows data reads and planning progress.
 
-1. **Install Docker Desktop**
-   - Download from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)
-   - Run the installer and restart your computer
-   - Start Docker Desktop and wait for it to be ready
+AI fees, paid-data fees and exchange trading funds are separate. Model requests can incur charges even when no trade is placed.
 
-2. **Run NOFX**
-   ```powershell
-   # Open PowerShell and run:
-   curl -o docker-compose.prod.yml https://raw.githubusercontent.com/NoFxAiOS/nofx/main/docker-compose.prod.yml
-   docker compose -f docker-compose.prod.yml up -d
-   ```
+## Exchanges
 
-3. **Access**: Open **http://127.0.0.1:3000** in your browser
+Frontier currently exposes Binance, Hyperliquid, OKX and Bitget. The broader NOFX runtime also includes Bybit, Gate, KuCoin, Aster and Lighter. Available products, order types and account permissions depend on the exchange.
 
-### Method 2: WSL2 (For Development)
+The links below are partner registration links that support development. Fee offers are set by each exchange.
 
-1. **Install WSL2**
-   ```powershell
-   # Open PowerShell as Administrator
-   wsl --install
-   ```
-   Restart your computer after installation.
+| Exchange                                                                                                                      | Status | Partner link                                                          |
+| :---------------------------------------------------------------------------------------------------------------------------- | :----: | :---------------------------------------------------------------------------------- |
+| <img src="web/public/exchange-icons/binance.jpg" width="20" height="20" style="vertical-align: middle;"/> **Binance**       |   ✅   | [Register](https://www.binance.com/join?ref=NOFXENG)                                |
+| <img src="web/public/exchange-icons/bybit.png" width="20" height="20" style="vertical-align: middle;"/> **Bybit**           |   ✅   | [Register](https://partner.bybit.com/b/83856)                                       |
+| <img src="web/public/exchange-icons/okx.svg" width="20" height="20" style="vertical-align: middle;"/> **OKX**               |   ✅   | [Register](https://www.okx.com/join/1865360)                                        |
+| <img src="web/public/exchange-icons/hyperliquid.png" width="20" height="20" style="vertical-align: middle;"/> **Hyperliquid** |   ✅   | [Register](https://app.hyperliquid.xyz/join/AITRADING)                              |
+| <img src="web/public/exchange-icons/bitget.svg" width="20" height="20" style="vertical-align: middle;"/> **Bitget**         |   ✅   | [Register](https://www.bitget.com/referral/register?from=referral&clacCode=c8a43172) |
+| <img src="web/public/exchange-icons/kucoin.svg" width="20" height="20" style="vertical-align: middle;"/> **KuCoin**         |   ✅   | [Register](https://www.kucoin.com/r/broker/CXEV7XKK)                                |
+| <img src="web/public/exchange-icons/gate.svg" width="20" height="20" style="vertical-align: middle;"/> **Gate**             |   ✅   | [Register](https://www.gatenode.xyz/share/VQBGUAxY)                                 |
+| <img src="web/public/exchange-icons/aster.svg" width="20" height="20" style="vertical-align: middle;"/> **Aster**           |   ✅   | [Register](https://www.asterdex.com/en/referral/fdfc0e)                             |
+| <img src="web/public/exchange-icons/lighter.png" width="20" height="20" style="vertical-align: middle;"/> **Lighter**       |   ✅   | [Register](https://app.lighter.xyz/?referral=68151432)                              |
 
-2. **Install Ubuntu from Microsoft Store**
-   - Open Microsoft Store
-   - Search "Ubuntu 22.04" and install
-   - Launch Ubuntu and set up username/password
+## How execution works
 
-3. **Install Dependencies in WSL2**
-   ```bash
-   # Update system
-   sudo apt update && sudo apt upgrade -y
+Plans and strategy decisions use the existing NOFX exchange adapters. The model does not receive wallet private keys or exchange credentials in its prompt.
 
-   # Install Go
-   wget https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
-   sudo tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz
-   echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-   source ~/.bashrc
+- **Reviewable orders.** Frontier shows account, sizing, entry and exit details before approval. Autopilot follows its configured strategy and runtime limits.
+- **Account-aware sizing.** Frontier uses the selected leverage and current available margin, with execution costs reserved. Quantity, tick size and venue limits still apply.
+- **Exchange-side exits.** The runtime places supported stop-loss and take-profit orders as fills are observed. Entry and protection are not atomic; inspect the exchange if protection fails.
+- **Order reconciliation.** Uncertain submission results are checked against the exchange rather than blindly resubmitted. Unresolved executions can pause further entries.
+- **Local configuration.** Exchange credentials are stored encrypted by the NOFX server. Your installation also holds signing material, so protect its files and backups.
 
-   # Install Node.js
-   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-   sudo apt-get install -y nodejs
+## Architecture
 
-   # Install TA-Lib
-   sudo apt-get install -y libta-lib0-dev
+```text
+Desktop browser
+  Frontier · Config · Dashboard · Strategy
+                    │
+                NOFX API
+                    │
+       ┌────────────┴────────────┐
+  Frontier planning         Autopilot
+  Review and approval       Strategy loop
+       └────────────┬────────────┘
+              Shared execution
+              Exchange adapters
+                    │
+             Your trading accounts
 
-   # Install Git
-   sudo apt-get install -y git
-   ```
-
-4. **Clone and Run NOFX**
-   ```bash
-   git clone https://github.com/NoFxAiOS/nofx.git
-   cd nofx
-
-   # Build and run backend
-   go build -o nofx && ./nofx
-
-   # In another terminal, run frontend
-   cd web && npm install && npm run dev
-   ```
-
-5. **Access**: Open **http://127.0.0.1:3000** in Windows browser
-
-### Method 3: Docker in WSL2 (Best of Both Worlds)
-
-1. **Install Docker Desktop with WSL2 backend**
-   - During Docker Desktop installation, enable "Use WSL 2 based engine"
-   - In Docker Desktop Settings → Resources → WSL Integration, enable your Linux distro
-
-2. **Run from WSL2 terminal**
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
-   ```
-
----
-
-## Server Deployment
-
-### Quick Deploy (HTTP via IP)
-
-By default, transport encryption is **disabled**, allowing you to access NOFX via IP address without HTTPS:
-
-```bash
-# Deploy to your server
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
+Models and paid data: NOFX provider clients · Claw402
+Storage: local configuration, plans and execution records
 ```
 
-Access via `http://YOUR_SERVER_IP:3000` - works immediately.
+<details>
+<summary>Earlier interface walkthrough</summary>
 
-### Enhanced Security (HTTPS)
+This video shows an earlier version of the interface. Navigation and visual design have since changed.
 
-For enhanced security, enable transport encryption in `.env`:
+https://github.com/user-attachments/assets/3310f495-14c5-4586-a1cc-3d32e44aa505
 
-```bash
-TRANSPORT_ENCRYPTION=true
-```
+</details>
 
-When enabled, browser uses Web Crypto API to encrypt API keys before transmission. This requires:
-- `https://` - Any domain with SSL
-- `http://localhost` - Local development
+## Brand assets
 
-### Quick HTTPS Setup with Cloudflare
-
-1. **Add your domain to Cloudflare** (free plan works)
-   - Go to [dash.cloudflare.com](https://dash.cloudflare.com)
-   - Add your domain and update nameservers
-
-2. **Create DNS record**
-   - Type: `A`
-   - Name: `nofx` (or your subdomain)
-   - Content: Your server IP
-   - Proxy status: **Proxied** (orange cloud)
-
-3. **Configure SSL/TLS**
-   - Go to SSL/TLS settings
-   - Set encryption mode to **Flexible**
-
-   ```
-   User ──[HTTPS]──→ Cloudflare ──[HTTP]──→ Your Server:3000
-   ```
-
-4. **Enable transport encryption**
-   ```bash
-   # Edit .env and set
-   TRANSPORT_ENCRYPTION=true
-   ```
-
-5. **Done!** Access via `https://nofx.yourdomain.com`
-
----
-
-## Initial Setup (Web Interface)
-
-After starting the system, configure through the web interface:
-
-1. **Configure AI Models** - Add your AI API keys (DeepSeek, OpenAI, etc.)
-2. **Configure Exchanges** - Set up exchange API credentials
-3. **Create Strategy** - Configure trading strategy in Strategy Studio
-4. **Create Trader** - Combine AI model + Exchange + Strategy
-5. **Start Trading** - Launch your configured traders
-
-All configuration is done through the web interface - no JSON file editing required.
-
----
-
-## Web Interface Features
-
-### Competition Page
-- Real-time ROI leaderboard
-- Multi-AI performance comparison charts
-- Live P/L tracking and rankings
-
-### Dashboard
-- TradingView-style candlestick charts
-- Real-time position management
-- AI decision logs with Chain of Thought reasoning
-- Equity curve tracking
-
-### Strategy Studio
-- Coin source configuration (Static list, AI500 pool, OI Top)
-- Technical indicators (EMA, MACD, RSI, ATR, Volume, OI, Funding Rate)
-- Risk control settings (leverage, position limits, margin usage)
-- AI test with real-time prompt preview
-
-### Debate Arena
-- Multi-AI debate sessions for trading decisions
-- Configurable AI roles (Bull, Bear, Analyst, Contrarian, Risk Manager)
-- Multiple rounds of debate with consensus voting
-- Auto-execute consensus trades
-
-### Backtest Lab
-- 3-step wizard configuration (Model → Parameters → Confirm)
-- Real-time progress visualization with animated ring
-- Equity curve chart with trade markers
-- Trade timeline with card-style display
-- Performance metrics (Return, Max DD, Sharpe, Win Rate)
-- AI decision trail with Chain of Thought
-
----
-
-## Common Issues
-
-### TA-Lib not found
-```bash
-# macOS
-brew install ta-lib
-
-# Ubuntu
-sudo apt-get install libta-lib0-dev
-```
-
-### AI API timeout
-- Check if API key is correct
-- Check network connection
-- System timeout is 120 seconds
-
-### Frontend can't connect to backend
-- Ensure backend is running on http://localhost:8080
-- Check if port is occupied
-
----
+- [Logo mark — SVG](web/public/icons/nofx-flow.svg)
+- [GitHub avatar — PNG, 512 × 512](web/public/brand/nofx-avatar-512.png)
+- [GitHub avatar — SVG source](web/public/brand/nofx-avatar.svg)
+- [README banner — SVG](docs/assets/nofx-banner.svg)
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| **[Architecture Overview](docs/architecture/README.md)** | System design and module index |
-| **[Strategy Module](docs/architecture/STRATEGY_MODULE.md)** | Coin selection, data assembly, AI prompts, execution |
-| **[Backtest Module](docs/architecture/BACKTEST_MODULE.md)** | Historical simulation, metrics, checkpoint/resume |
-| **[Debate Module](docs/architecture/DEBATE_MODULE.md)** | Multi-AI debate, voting consensus, auto-execution |
-| **[FAQ](docs/faq/README.md)** | Frequently asked questions |
-| **[Getting Started](docs/getting-started/README.md)** | Deployment guide |
+| Guide | Contents |
+| :---- | :------- |
+| [Frontier](docs/features/trade-planning.md) | Planning, live execution, data and recovery |
+| [Getting started](docs/getting-started/README.md) | Deployment and exchange API guides |
+| [Architecture](docs/architecture/README.md) | System design and module index |
+| [Strategy module](docs/architecture/STRATEGY_MODULE.md) | Coin selection, AI prompts and execution |
+| [FAQ](docs/guides/faq.en.md) | Common questions |
+| [Troubleshooting](docs/guides/TROUBLESHOOTING.md) | Diagnosing common issues |
 
----
+## Community
 
-## License
 
-This project is licensed under **GNU Affero General Public License v3.0 (AGPL-3.0)** - See [LICENSE](LICENSE) file.
-
----
+[Telegram](https://t.me/nofx_dev_community) · [Twitter/X](https://x.com/vergex_ai) · [Issues](https://github.com/NoFxAiOS/nofx/issues) · [vergex.trade](https://vergex.trade) · [Live dashboard](https://vergex.trade/explore)
 
 ## Contributing
 
-We welcome contributions! See:
-- **[Contributing Guide](CONTRIBUTING.md)** - Development workflow and PR process
-- **[Code of Conduct](CODE_OF_CONDUCT.md)** - Community guidelines
-- **[Security Policy](SECURITY.md)** - Report vulnerabilities
+Code, documentation, translations, and bug reports are all welcome — see the [Contributing Guide](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), and [Security Policy](SECURITY.md).
 
----
+NOFX tracks meaningful contributions and intends to reward contributors as the ecosystem grows. Priority issues carry higher weight.
 
-## Contributor Airdrop Program
+| Contribution      | Weight |
+| :---------------- | :----: |
+| Pinned Issue PRs  | ★★★★★★ |
+| Code (Merged PRs) | ★★★★★  |
+| Bug Fixes         |  ★★★★  |
+| Feature Ideas     |  ★★★   |
+| Bug Reports       |   ★★   |
+| Documentation     |   ★★   |
 
-All contributions are tracked on GitHub. When NOFX generates revenue, contributors will receive airdrops based on their contributions.
+<a href="https://github.com/NoFxAiOS/nofx/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=NoFxAiOS/nofx" alt="Contributors"/>
+</a>
 
-**PRs that resolve [Pinned Issues](https://github.com/NoFxAiOS/nofx/issues) receive the HIGHEST rewards!**
+## Sponsors
 
-| Contribution Type | Weight |
-|------------------|:------:|
-| **Pinned Issue PRs** | ⭐⭐⭐⭐⭐⭐ |
-| **Code Commits** (Merged PRs) | ⭐⭐⭐⭐⭐ |
-| **Bug Fixes** | ⭐⭐⭐⭐ |
-| **Feature Suggestions** | ⭐⭐⭐ |
-| **Bug Reports** | ⭐⭐ |
-| **Documentation** | ⭐⭐ |
+<a href="https://github.com/pjl914335852-ux"><img src="https://github.com/pjl914335852-ux.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/cat9999aaa"><img src="https://github.com/cat9999aaa.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/1733055465"><img src="https://github.com/1733055465.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/kolal2020"><img src="https://github.com/kolal2020.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/CyberFFarm"><img src="https://github.com/CyberFFarm.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/vip3001003"><img src="https://github.com/vip3001003.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/mrtluh"><img src="https://github.com/mrtluh.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/cpcp1117-source"><img src="https://github.com/cpcp1117-source.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/match-007"><img src="https://github.com/match-007.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/leiwuhen1715"><img src="https://github.com/leiwuhen1715.png" width="50" height="50" style="border-radius:50%"/></a>
+<a href="https://github.com/SHAOXIA1991"><img src="https://github.com/SHAOXIA1991.png" width="50" height="50" style="border-radius:50%"/></a>
 
----
+[Become a sponsor](https://github.com/sponsors/NoFxAiOS)
 
-## Contact
+<br/>
 
-- **GitHub Issues**: [Submit an Issue](https://github.com/NoFxAiOS/nofx/issues)
-- **Developer Community**: [Telegram Group](https://t.me/nofx_dev_community)
+If NOFX is useful to you, a star helps other traders find it.
 
----
+[![Star History Chart](https://star-history.dera.page/svg?repos=NoFxAiOS/nofx&type=Date)](https://star-history.dera.page/#NoFxAiOS/nofx&Date)
 
-## Star History
+## License
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NoFxAiOS/nofx&type=Date)](https://star-history.com/#NoFxAiOS/nofx&Date)
+[AGPL-3.0](LICENSE)
+
+<sub>Automated trading involves substantial risk. AI-driven strategies are experimental and can lose money. Size positions appropriately, understand each venue, and never trade funds you cannot afford to lose. Full [disclaimer](DISCLAIMER.md).</sub>

@@ -1,9 +1,122 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap')
+layer(base);
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap')
+layer(base);
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@theme {
+  --color-nofx-gold: #295be8;
+  --color-nofx-gold-dim: rgba(41,91,232, 0.1);
+  --color-nofx-gold-glow: rgba(41,91,232, 0.3);
+  --color-nofx-gold-highlight: #204bc4;
+
+  --color-nofx-bg: #f6f8fc;
+  --color-nofx-bg-deeper: #edf1f7;
+  --color-nofx-bg-lighter: #ffffff;
+
+  --color-nofx-accent: #295be8;
+
+  --color-nofx-text: #192434;
+  --color-nofx-text-main: #192434;
+  --color-nofx-text-muted: #707e92;
+
+  --color-nofx-success: #2e8b57;
+  --color-nofx-danger: #d6433a;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: IBM Plex Mono, Menlo, Monaco, Courier New, monospace;
+
+  --background-image-gradient-radial: radial-gradient(
+    circle at center,
+    var(--tw-gradient-stops)
+  );
+  --background-image-gradient-conic: conic-gradient(
+    from 180deg at 50% 50%,
+    var(--tw-gradient-stops)
+  );
+  --background-image-scanlines: url("data:image/svg+xml,%3Csvg width='4' height='4' viewBox='0 0 4 4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0H4V2H0V0Z' fill='rgba(0,0,0,0.4)'/%3E%3C/svg%3E");
+  --background-image-grid-pattern:
+    linear-gradient(to right, #1f2937 1px, transparent 1px),
+    linear-gradient(to bottom, #1f2937 1px, transparent 1px);
+
+  --animate-pulse-slow: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-scan: scan 8s linear infinite;
+  --animate-scan-fast: scan 2s linear infinite;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-glitch: glitch 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) both
+    infinite;
+  --animate-shimmer: shimmer 2s linear infinite;
+
+  --shadow-neon:
+    0 0 5px var(--color-nofx-gold), 0 0 20px var(--color-nofx-gold-dim);
+  --shadow-neon-blue:
+    0 0 5px var(--color-nofx-accent), 0 0 20px rgba(0, 240, 255, 0.2);
+
+  @keyframes scan {
+    0% {
+      background-position: 0 0;
+    }
+    100% {
+      background-position: 0 100%;
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+  @keyframes glitch {
+    0% {
+      transform: translate(0);
+    }
+    20% {
+      transform: translate(-2px, 2px);
+    }
+    40% {
+      transform: translate(-2px, -2px);
+    }
+    60% {
+      transform: translate(2px, 2px);
+    }
+    80% {
+      transform: translate(2px, -2px);
+    }
+    100% {
+      transform: translate(0);
+    }
+  }
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
 
 /* 强制显示滚动条以确保所有页面布局一致 */
 html {
@@ -11,55 +124,54 @@ html {
 }
 
 :root {
-  /* NoFX Neo-Gold Design System */
-  --nofx-gold: #F0B90B;
-  --nofx-bg: #05070A;
-  --nofx-accent: #00F0FF;
-  --nofx-glass: rgba(5, 7, 10, 0.7);
-  --nofx-border: rgba(240, 185, 11, 0.2);
+  /* NOFX Flow: cobalt identity, clear surfaces, semantic trading colors. */
+  --nofx-gold: #295be8;
+  --nofx-bg: #f6f8fc;
+  --nofx-accent: #295be8;
+  --nofx-glass: rgba(255,255,255, 0.85);
+  --nofx-border: rgba(25,36,52, 0.14);
 
-  /* Cinematic Glows */
-  --glow-primary: 0 0 20px rgba(240, 185, 11, 0.3);
-  --glow-accent: 0 0 20px rgba(0, 240, 255, 0.3);
-  --glow-text: 0 0 10px rgba(240, 185, 11, 0.5);
+  /* Soft accents (no neon on paper) */
+  --glow-primary: none;
+  --glow-accent: none;
+  --glow-text: none;
 
-  --background: #05070A;
-  --header-bg: rgba(2, 3, 4, 0.85);
-  /* Deep Abyssal */
+  --background: #f6f8fc;
+  --header-bg: rgba(255,255,255, 0.85);
 
-  --glass-bg: rgba(5, 7, 10, 0.4);
-  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-bg: rgba(255,255,255, 0.7);
+  --glass-border: rgba(25,36,52, 0.12);
 
-  --panel-bg: rgba(14, 18, 23, 0.6);
-  --panel-bg-hover: rgba(20, 24, 29, 0.8);
-  --panel-border: rgba(255, 255, 255, 0.1);
-  --panel-border-hover: rgba(240, 185, 11, 0.5);
+  --panel-bg: #ffffff;
+  --panel-bg-hover: #f0f4fb;
+  --panel-border: rgba(25,36,52, 0.14);
+  --panel-border-hover: rgba(41,91,232, 0.5);
 
-  --foreground: #EAECEF;
-  --text-primary: #EAECEF;
-  --text-secondary: #848E9C;
-  --text-tertiary: #5E6673;
-  --text-disabled: #474D57;
+  --foreground: #192434;
+  --text-primary: #192434;
+  --text-secondary: #637087;
+  --text-tertiary: #707e92;
+  --text-disabled: #a3adbd;
 
-  /* Trading Colors */
-  --binance-green: #0ECB81;
-  --binance-green-bg: rgba(14, 203, 129, 0.12);
-  --binance-green-border: rgba(14, 203, 129, 0.3);
-  --binance-red: #F6465D;
-  --binance-red-bg: rgba(246, 70, 93, 0.12);
-  --binance-red-border: rgba(246, 70, 93, 0.3);
-  --binance-yellow: #F0B90B;
+  /* Trading Colors (forest green / crimson on paper) */
+  --binance-green: #2E8B57;
+  --binance-green-bg: rgba(46, 139, 87, 0.12);
+  --binance-green-border: rgba(46, 139, 87, 0.35);
+  --binance-red: #D6433A;
+  --binance-red-bg: rgba(214, 67, 58, 0.12);
+  --binance-red-border: rgba(214, 67, 58, 0.35);
+  --binance-yellow: #295be8;
 
-  /* Shadows */
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
-  --shadow-glow: 0 0 30px rgba(240, 185, 11, 0.15);
+  /* Shadows (subtle on paper) */
+  --shadow-sm: 0 1px 2px rgba(25,36,52, 0.08);
+  --shadow-md: 0 2px 8px rgba(25,36,52, 0.10);
+  --shadow-lg: 0 6px 24px rgba(25,36,52, 0.12);
+  --shadow-glow: none;
 
-  font-family: 'IBM Plex Mono', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.6;
   font-weight: 400;
-  color-scheme: dark;
+  color-scheme: light;
   color: var(--foreground);
   background-color: var(--background);
   font-synthesis: none;
@@ -70,17 +182,14 @@ html {
 
 /* CRT & Tech Effects */
 .crt-overlay {
-  background:
-    linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%),
-    linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
-  background-size: 100% 2px, 3px 100%;
+  background: none;
   pointer-events: none;
 }
 
 .tech-border {
   position: relative;
-  background: rgba(5, 7, 10, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
 }
 
 .tech-border::before,
@@ -115,20 +224,20 @@ html {
 }
 
 .bg-vignette {
-  background: radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.6) 80%, #000000 100%);
+  background: none;
   pointer-events: none;
 }
 
 .text-glow {
-  text-shadow: 0 0 10px rgba(240, 185, 11, 0.6);
+  text-shadow: none;
 }
 
 .text-glow-accent {
-  text-shadow: 0 0 10px rgba(0, 240, 255, 0.6);
+  text-shadow: none;
 }
 
 .border-glow {
-  box-shadow: 0 0 15px rgba(240, 185, 11, 0.2);
+  box-shadow: none;
 }
 
 body {
@@ -136,14 +245,14 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background-color: var(--background);
-  background-image: radial-gradient(circle at 50% 0%, #151921 0%, #05070a 60%);
+  background-image: none;
   background-attachment: fixed;
 }
 
-/* Premium Selection Styles */
+/* Selection — vermilion tint on paper */
 ::selection {
-  background: rgba(255, 88, 0, 0.3);
-  color: #FFFFFF;
+  background: rgba(41,91,232, 0.25);
+  color: #192434;
 }
 
 #root {
@@ -288,70 +397,79 @@ body {
   z-index: 9999;
 }
 
+/*
+ * Cream-paper toasts (matches the terminal theme). The --tm-* tokens are scoped
+ * to .nofx-terminal, but sonner renders in a portal at the document root, so we
+ * use the literal cream palette here to stay readable everywhere.
+ */
 .nofx-toast {
-  background: #0b0e11 !important;
-  border: 1px solid var(--panel-border) !important;
-  color: var(--text-primary) !important;
-  box-shadow: var(--shadow-lg) !important;
-  border-radius: 6px !important;
+  background: #f6f8fc !important;
+  border: 1px solid #e1e7f0 !important;
+  color: #192434 !important;
+  box-shadow: 0 8px 28px rgba(25,36,52, 0.18) !important;
+  border-radius: 4px !important;
+  font-family: 'IBM Plex Mono', 'Courier New', monospace !important;
 }
 
 .nofx-toast .sonner-title {
-  color: var(--text-primary) !important;
+  color: #192434 !important;
   font-weight: 700;
 }
 
 .nofx-toast .sonner-description {
-  color: var(--text-secondary) !important;
+  color: #39475b !important;
 }
 
-/* Success / Error / Warning tint */
+/* Per-type accent: cream background, colored left rail + title. */
 .nofx-toast[data-type='success'] {
-  background: #0b0e11 !important;
-  border-color: var(--binance-green) !important;
-  border-left: 3px solid var(--binance-green) !important;
+  border-color: #2e8b57 !important;
+  border-left: 3px solid #2e8b57 !important;
 }
 
-.nofx-toast[data-type='success'] .sonner-title,
-.nofx-toast[data-type='success'] .sonner-description {
-  color: var(--binance-green) !important;
+.nofx-toast[data-type='success'] .sonner-title {
+  color: #1f6b41 !important;
 }
 
 .nofx-toast[data-type='error'] {
-  background: #0b0e11 !important;
-  border-color: var(--binance-red) !important;
-  border-left: 3px solid var(--binance-red) !important;
+  border-color: #295be8 !important;
+  border-left: 3px solid #295be8 !important;
 }
 
-.nofx-toast[data-type='error'] .sonner-title,
-.nofx-toast[data-type='error'] .sonner-description {
-  color: var(--binance-red) !important;
+.nofx-toast[data-type='error'] .sonner-title {
+  color: #c23529 !important;
 }
 
 .nofx-toast[data-type='warning'],
 .nofx-toast[data-type='info'] {
-  background: #0b0e11 !important;
-  border-color: var(--binance-yellow) !important;
-  border-left: 3px solid var(--binance-yellow) !important;
+  border-color: #c8860b !important;
+  border-left: 3px solid #c8860b !important;
 }
 
 .nofx-toast[data-type='warning'] .sonner-title,
-.nofx-toast[data-type='warning'] .sonner-description,
-.nofx-toast[data-type='info'] .sonner-title,
-.nofx-toast[data-type='info'] .sonner-description {
-  color: var(--binance-yellow) !important;
+.nofx-toast[data-type='info'] .sonner-title {
+  color: #9a6800 !important;
 }
 
 .nofx-toast .sonner-close-button {
-  color: var(--text-secondary) !important;
+  background: #f6f8fc !important;
+  border-color: #e1e7f0 !important;
+  color: #39475b !important;
 }
 
 .nofx-toast .sonner-close-button:hover {
-  color: var(--text-primary) !important;
+  color: #192434 !important;
 }
 
-/* Monospace numbers */
+/* Monospace numbers — use for prices, balances, timestamps, code */
 .mono {
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.text-profit,
+.text-loss,
+.number-up,
+.number-down {
   font-family: 'IBM Plex Mono', 'Courier New', monospace;
   font-variant-numeric: tabular-nums;
 }
@@ -364,14 +482,6 @@ button {
 
 button:hover:not(:disabled) {
   filter: brightness(1.1);
-  filter: brightness(1.1);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-button:active:not(:disabled) {
-  transform: scale(0.98) translateY(0);
-  box-shadow: none;
 }
 
 /* Soft Glow for Primary Buttons (Yellow) */
@@ -428,7 +538,7 @@ button:disabled {
   background: rgba(30, 35, 41, 0.6);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255,255,255, 0.08);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
 }
 
@@ -436,7 +546,15 @@ button:disabled {
   background: rgba(30, 35, 41, 0.4);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255,255,255, 0.05);
+}
+
+.nofx-glass {
+  background: rgba(30, 35, 41, 0.5);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255, 0.06);
+  border-radius: 12px;
 }
 
 /* Premium Input Styles */
@@ -467,7 +585,7 @@ textarea::placeholder {
 /* Specific Premium Input Utility */
 .premium-input {
   background: rgba(11, 14, 17, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255,255,255, 0.1);
   border-radius: 8px;
   padding: 0.5rem 0.75rem;
   font-family: 'IBM Plex Mono', monospace;
@@ -938,35 +1056,7 @@ tr:hover {
   animation: holo-shift 8s ease infinite, holo-flicker 4s infinite;
 }
 
-/* Mobile Breathing Animation */
-@keyframes holo-breath {
-
-  0%,
-  100% {
-    transform: scale(1);
-  }
-
-  50% {
-    transform: scale(1.02);
-  }
-}
-
-.animate-breath-mobile {
-  animation: none;
-}
-
-@media (max-width: 768px) {
-  .animate-breath-mobile {
-    animation: holo-breath 4s ease-in-out infinite;
-  }
-
-  /* Optimize premium effects for mobile */
-  .char-premium-effects {
-    filter:
-      drop-shadow(0 0 1px rgba(240, 185, 11, 0.6)) drop-shadow(0 0 1px rgba(0, 240, 255, 0.5));
-  }
-}
-
+/* Holographic overlay effect */
 .holo-overlay {
   /* Complex gradient + noise for texture */
   background:
@@ -978,22 +1068,4 @@ tr:hover {
       rgba(240, 185, 11, 0.1) 360deg);
   mix-blend-mode: overlay;
   background-blend-mode: overlay, normal;
-}
-
-/* Chromatic Aberration & Rim Light */
-.char-premium-effects {
-  filter:
-    /* Rim Light: Main Warm Gold + Sharp White Highlight (No Cyan to avoid green) */
-    drop-shadow(0 0 2px rgba(240, 185, 11, 0.6)) drop-shadow(0 0 1px rgba(255, 255, 255, 0.4))
-    /* Chromatic Aberration: Red/Blue shift (Subtle) */
-    drop-shadow(-1px 0 0 rgba(255, 50, 50, 0.4)) drop-shadow(1px 0 0 rgba(50, 50, 255, 0.4));
-  transition: filter 0.3s ease;
-}
-
-.char-premium-effects:hover {
-  filter:
-    /* Intense Gold Glow on Hover */
-    drop-shadow(0 0 8px rgba(240, 185, 11, 0.8)) drop-shadow(0 0 2px rgba(255, 255, 255, 0.6))
-    /* Enhanced Aberration */
-    drop-shadow(-2px 0 0 rgba(255, 50, 50, 0.5)) drop-shadow(2px 0 0 rgba(50, 50, 255, 0.5));
 }

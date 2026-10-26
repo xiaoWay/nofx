@@ -1,386 +1,1125 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  Bot,
+  Check,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Save,
+  Shield,
+  Sparkles,
+  Target,
+  Trash2,
+} from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
-import {
-  Plus,
-  Copy,
-  Trash2,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Settings,
-  BarChart3,
-  Target,
-  Shield,
-  Zap,
-  Activity,
-  Save,
-  Sparkles,
-  Eye,
-  Play,
-  FileText,
-  Loader2,
-  RefreshCw,
-  Clock,
-  Bot,
-  Terminal,
-  Code,
-  Send,
-  Download,
-  Upload,
-  Globe,
-} from 'lucide-react'
-import type { Strategy, StrategyConfig, AIModel } from '../types'
+import { DeepVoidBackground } from '../components/common/DeepVoidBackground'
+import { api } from '../lib/api'
 import { confirmToast, notify } from '../lib/notify'
-import { CoinSourceEditor } from '../components/strategy/CoinSourceEditor'
-import { IndicatorEditor } from '../components/strategy/IndicatorEditor'
-import { RiskControlEditor } from '../components/strategy/RiskControlEditor'
-import { PromptSectionsEditor } from '../components/strategy/PromptSectionsEditor'
-import { PublishSettingsEditor } from '../components/strategy/PublishSettingsEditor'
-import { DeepVoidBackground } from '../components/DeepVoidBackground'
+import type {
+  AIStrategyConfig,
+  CoinSourceConfig,
+  IndicatorConfig,
+  RiskControlConfig,
+  Strategy,
+  StrategyConfig,
+} from '../types'
+import { launchAutopilot } from '../lib/launch/launchAutopilot'
+import type {
+  MarketSymbol,
+  VergexHeatmapBin,
+  VergexHeatmapResponse,
+  VergexSignalItem,
+  VergexDirectionCurrentResponse,
+  VergexDirectionHistoryResponse,
+} from '../lib/api/data'
+import { buildDashboardPath, ROUTES } from '../router/paths'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+
+type Scope =
+  'all' | 'crypto' | 'stock' | 'commodity' | 'index' | 'forex' | 'pre_ipo'
+type ListMode = 'claw402' | 'pool'
+
+const scopeOptions: Array<{ value: Scope; zh: string; en: string }> = [
+  { value: 'all', zh: 'All Claw402', en: 'All Claw402' },
+  { value: 'stock', zh: 'US Stocks', en: 'US Stocks' },
+  { value: 'crypto', zh: 'Crypto', en: 'Crypto' },
+  { value: 'commodity', zh: 'Commodities', en: 'Commodities' },
+  { value: 'index', zh: 'Indices', en: 'Indices' },
+  { value: 'forex', zh: 'FX', en: 'FX' },
+  { value: 'pre_ipo', zh: 'Pre-IPO', en: 'Pre-IPO' },
+]
+
+const categoryPriority: Record<string, number> = {
+  stock: 1,
+  crypto: 2,
+  commodity: 3,
+  index: 4,
+  forex: 5,
+  pre_ipo: 6,
+}
+
+const timeframeOptions = ['5m', '15m', '30m', '1h', '4h', '1d']
+const barCountOptions = [20, 30, 50]
+const topNOptions = [5, 6, 7, 8, 9, 10]
+const claw402BoardLimit = 30
+const confidenceOptions = [65, 75, 82]
+
+const text = (language: string, zh: string, en: string) =>
+  language === 'zh' ? zh : en
+
+type Profile = 'careful' | 'balanced' | 'active'
+
+const profileOptions: Array<{
+  value: Profile
+  zh: string
+  en: string
+  zhNote: string
+  enNote: string
+  maxPositions: number
+  leverage: number
+  confidence: number
+  topN: number
+  timeframe: string
+  bars: number
+  margin: number
+  promptZh: string
+  promptEn: string
+}> = [
+  {
+    value: 'careful',
+    zh: 'Careful',
+    en: 'Careful',
+    zhNote: 'Fewer trades, only aligned signals',
+    enNote: 'Fewer trades, only aligned signals',
+    maxPositions: 1,
+    leverage: 10,
+    confidence: 82,
+    topN: 5,
+    timeframe: '1h',
+    bars: 30,
+    margin: 1.0,
+    promptZh:
+      'Careful mode: follow the live Claw402 direction board; use direction history, the cost/liquidation heatmap, and raw candles as context only.',
+    promptEn:
+      'Careful mode: follow the live Claw402 direction board; use direction history, the cost/liquidation heatmap, and raw candles as context only.',
+  },
+  {
+    value: 'balanced',
+    zh: 'Balanced',
+    en: 'Balanced',
+    zhNote: 'Recommended balance of opportunity and risk',
+    enNote: 'Recommended balance of opportunity and risk',
+    maxPositions: 2,
+    leverage: 10,
+    confidence: 75,
+    topN: 5,
+    timeframe: '15m',
+    bars: 30,
+    margin: 1.0,
+    promptZh:
+      'Balanced mode: prioritize the top live direction-board symbols and hold while their direction remains unchanged.',
+    promptEn:
+      'Balanced mode: prioritize the top live direction-board symbols and hold while their direction remains unchanged.',
+  },
+  {
+    value: 'active',
+    zh: 'Active',
+    en: 'Active',
+    zhNote: 'Faster trend capture with more positions',
+    enNote: 'Faster trend capture with more positions',
+    maxPositions: 3,
+    leverage: 10,
+    confidence: 68,
+    topN: 8,
+    timeframe: '5m',
+    bars: 50,
+    margin: 1.0,
+    promptZh:
+      'Active mode: follow strong Claw402 direction changes quickly and keep positions until the board turns, becomes neutral, or drops the symbol.',
+    promptEn:
+      'Active mode: follow strong Claw402 direction changes quickly and keep positions until the board turns, becomes neutral, or drops the symbol.',
+  },
+]
+
+function getAIConfig(config: StrategyConfig): AIStrategyConfig | null {
+  if (config.ai_config) return config.ai_config
+  if (config.coin_source && config.indicators && config.risk_control) {
+    return {
+      coin_source: config.coin_source,
+      indicators: config.indicators,
+      risk_control: config.risk_control,
+      prompt_sections: config.prompt_sections,
+      custom_prompt: config.custom_prompt,
+    }
+  }
+  return null
+}
+
+function defaultCoinSource(
+  source?: Partial<CoinSourceConfig>
+): CoinSourceConfig {
+  const staticCoins = source?.static_coins || []
+  const minVergexLimit =
+    staticCoins.length > 0 ? Math.min(staticCoins.length, 10) : 10
+  const vergexLimit = Math.min(
+    Math.max(source?.vergex_limit || minVergexLimit, minVergexLimit),
+    10
+  )
+  return {
+    source_type: 'vergex_signal',
+    static_coins: staticCoins,
+    excluded_coins: [],
+    use_ai500: false,
+    ai500_limit: 0,
+    use_oi_top: false,
+    oi_top_limit: 0,
+    use_oi_low: false,
+    oi_low_limit: 0,
+    use_hyper_all: false,
+    use_hyper_main: false,
+    hyper_main_limit: 0,
+    hyper_rank_category: source?.hyper_rank_category || 'all',
+    hyper_rank_direction: 'gainers',
+    hyper_rank_limit: 0,
+    vergex_limit: vergexLimit,
+    vergex_market_type: source?.vergex_market_type || 'all',
+    vergex_chain: source?.vergex_chain || 'hyperliquid',
+    vergex_liq_band: source?.vergex_liq_band || '',
+  }
+}
+
+function defaultIndicators(
+  indicators?: Partial<IndicatorConfig>
+): IndicatorConfig {
+  const klines = indicators?.klines || {
+    primary_timeframe: '15m',
+    primary_count: 30,
+    enable_multi_timeframe: false,
+  }
+
+  return {
+    klines: {
+      primary_timeframe: klines.primary_timeframe || '15m',
+      primary_count: klines.primary_count || 30,
+      longer_timeframe: '',
+      longer_count: 0,
+      enable_multi_timeframe: false,
+      selected_timeframes: [klines.primary_timeframe || '15m'],
+    },
+    enable_raw_klines: true,
+    enable_ema: false,
+    enable_macd: false,
+    enable_rsi: false,
+    enable_atr: false,
+    enable_boll: false,
+    enable_volume: false,
+    enable_oi: false,
+    enable_funding_rate: false,
+    nofxos_api_key: '',
+    enable_quant_data: false,
+    enable_quant_oi: false,
+    enable_quant_netflow: false,
+    enable_oi_ranking: false,
+    enable_netflow_ranking: false,
+    enable_price_ranking: false,
+  }
+}
+
+function defaultRisk(risk?: Partial<RiskControlConfig>): RiskControlConfig {
+  const leverage =
+    risk?.altcoin_max_leverage || risk?.btc_eth_max_leverage || 10
+  return {
+    max_positions: risk?.max_positions || 8,
+    btc_eth_max_leverage: leverage,
+    altcoin_max_leverage: leverage,
+    btc_eth_max_position_value_ratio:
+      risk?.btc_eth_max_position_value_ratio || 5,
+    altcoin_max_position_value_ratio:
+      risk?.altcoin_max_position_value_ratio || 5,
+    max_margin_usage: risk?.max_margin_usage || 1.0,
+    min_position_size: risk?.min_position_size || 12,
+    min_risk_reward_ratio: risk?.min_risk_reward_ratio || 3,
+    min_confidence: risk?.min_confidence || 78,
+  }
+}
+
+function simplifyConfig(
+  config: StrategyConfig | null | undefined
+): StrategyConfig {
+  const ai = config ? getAIConfig(config) : null
+  return {
+    strategy_type: 'ai_trading',
+    language: config?.language || 'zh',
+    ai_config: {
+      coin_source: defaultCoinSource(ai?.coin_source),
+      indicators: defaultIndicators(ai?.indicators),
+      risk_control: defaultRisk(ai?.risk_control),
+      custom_prompt: ai?.custom_prompt || '',
+      prompt_sections: ai?.prompt_sections,
+    },
+    grid_config: null,
+    publish_config: config?.publish_config,
+  }
+}
+
+function normalizeSymbol(symbol: string) {
+  return symbol
+    .trim()
+    .toUpperCase()
+    .replace(/^XYZ:/, '')
+    .replace(/-USDC$/, '')
+}
+
+function signalMarketType(item: VergexSignalItem) {
+  return (
+    item.market_type || (item.category === 'crypto' ? 'core_perp' : 'hip3_perp')
+  )
+}
+
+function strategySymbolForSignal(item: VergexSignalItem) {
+  const symbol = normalizeSymbol(item.symbol)
+  return signalMarketType(item) === 'core_perp' ? symbol : `xyz:${symbol}`
+}
+
+function categoryLabel(category: string | undefined, language: string) {
+  const option = scopeOptions.find((item) => item.value === category)
+  if (!option) return category || 'TradeFi'
+  return text(language, option.zh, option.en)
+}
+
+function profileFromRisk(risk: RiskControlConfig | null | undefined): Profile {
+  if (!risk) return 'balanced'
+  if (risk.min_confidence >= 80 || risk.max_positions <= 1) return 'careful'
+  if (risk.altcoin_max_leverage >= 5 || risk.max_positions >= 3) return 'active'
+  return 'balanced'
+}
+
+function formatChange(value?: number) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return ''
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${value.toFixed(2)}%`
+}
+
+function signalBiasInfo(bias: string | undefined) {
+  const normalized = (bias || '').toLowerCase()
+  const bullish = ['bullish', 'long', 'buy', 'open_long'].includes(normalized)
+  const bearish = ['bearish', 'short', 'sell', 'open_short'].includes(
+    normalized
+  )
+  if (bullish) {
+    return {
+      label: 'Long Bias',
+      hint: 'Long bias',
+      classes: 'border-nofx-success/35 bg-nofx-success/10 text-nofx-success',
+      icon: ArrowUpRight,
+    }
+  }
+  if (bearish) {
+    return {
+      label: 'Short Bias',
+      hint: 'Short bias',
+      classes: 'border-nofx-danger/35 bg-nofx-danger/10 text-nofx-danger',
+      icon: ArrowDownRight,
+    }
+  }
+  return {
+    label: 'Neutral',
+    hint: 'Neutral bias',
+    classes:
+      'border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper text-nofx-text-muted',
+    icon: Target,
+  }
+}
+
+function formatSignalStrength(item: VergexSignalItem) {
+  const parts: string[] = []
+  if (typeof item.score === 'number' && Number.isFinite(item.score)) {
+    const sign = item.score > 0 ? '+' : ''
+    parts.push(`z ${sign}${item.score.toFixed(2)}`)
+  }
+  if (typeof item.confidence === 'number' && Number.isFinite(item.confidence)) {
+    const confidence =
+      item.confidence <= 1 ? item.confidence * 100 : item.confidence
+    if (confidence > 0) {
+      parts.push(`${confidence.toFixed(0)}% conf`)
+    }
+  }
+  return parts.join(' · ') || 'details ready'
+}
+
+function signalSortValue(item: VergexSignalItem) {
+  return categoryPriority[item.category || ''] || 99
+}
+
+function compareSignalItems(a: VergexSignalItem, b: VergexSignalItem) {
+  const categoryDelta = signalSortValue(a) - signalSortValue(b)
+  if (categoryDelta !== 0) return categoryDelta
+  return (
+    (a.rank || Number.MAX_SAFE_INTEGER) - (b.rank || Number.MAX_SAFE_INTEGER)
+  )
+}
+
+function sameSignalItem(a: VergexSignalItem | null, b: VergexSignalItem) {
+  if (!a) return false
+  return (
+    normalizeSymbol(a.symbol) === normalizeSymbol(b.symbol) &&
+    signalMarketType(a) === signalMarketType(b)
+  )
+}
+
+function formatMoney(value: number | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  const sign = value < 0 ? '-' : ''
+  const abs = Math.abs(value)
+  if (abs >= 1_000_000_000)
+    return `${sign}$${(abs / 1_000_000_000).toFixed(2)}B`
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`
+  if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(2)}K`
+  return `${sign}$${abs.toFixed(2)}`
+}
+
+function formatNumber(value: number | undefined, digits = 2) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return value.toFixed(digits)
+}
+
+function formatPrice(value: number | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return `$${value.toFixed(value >= 100 ? 2 : 4)}`
+}
+
+function directionStyle(direction?: string) {
+  const normalized = (direction || '').toLowerCase()
+  if (normalized === 'bullish') {
+    return {
+      dot: 'bg-nofx-success',
+      text: 'text-nofx-success',
+      chip: 'border-nofx-success/25 bg-nofx-success/10 text-nofx-success',
+      bar: 'bg-nofx-success/70',
+    }
+  }
+  if (normalized === 'bearish') {
+    return {
+      dot: 'bg-nofx-danger',
+      text: 'text-nofx-danger',
+      chip: 'border-nofx-danger/25 bg-nofx-danger/10 text-nofx-danger',
+      bar: 'bg-nofx-danger/70',
+    }
+  }
+  return {
+    dot: 'bg-slate-400',
+    text: 'text-nofx-text-muted',
+    chip: 'border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper text-nofx-text-muted',
+    bar: 'bg-slate-500/70',
+  }
+}
+
+function DetailMetricCard({
+  label,
+  value,
+  note,
+  tone = 'neutral',
+}: {
+  label: string
+  value: string
+  note?: string
+  tone?: 'neutral' | 'green' | 'red' | 'cyan' | 'gold'
+}) {
+  const toneClass =
+    tone === 'green'
+      ? 'text-nofx-success'
+      : tone === 'red'
+        ? 'text-nofx-danger'
+        : tone === 'cyan'
+          ? 'text-nofx-gold'
+          : tone === 'gold'
+            ? 'text-nofx-gold'
+            : 'text-nofx-text'
+
+  return (
+    <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper p-3">
+      <div className="text-xs text-nofx-text-muted">{label}</div>
+      <div className={`mt-2 font-mono text-lg ${toneClass}`}>{value}</div>
+      {note ? (
+        <div className="mt-2 text-xs leading-5 text-nofx-text-muted">
+          {note}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function DirectionChangePanel({
+  current,
+  history,
+}: {
+  current: VergexDirectionCurrentResponse | null
+  history: VergexDirectionHistoryResponse | null
+}) {
+  if (!current && !history) {
+    return (
+      <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper p-4 text-sm text-nofx-text-muted">
+        Bull/Bear Radar has not loaded yet.
+      </div>
+    )
+  }
+  const direction = current?.direction || current?.new_bias || 'neutral'
+  const factors = Object.entries(current?.reason || {})
+  return (
+    <section className="overflow-hidden rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter shadow-lg">
+      <div className="border-b border-[rgba(25,36,52,0.14)] px-5 py-4">
+        <div className="text-base font-semibold text-nofx-text">
+          Bull/Bear Radar
+        </div>
+        <div
+          className={`mt-3 text-3xl font-bold ${directionStyle(direction).text}`}
+        >
+          {signalBiasInfo(direction).label}
+        </div>
+        <div className="mt-2 font-mono text-sm text-nofx-text-muted">
+          mark {formatPrice(current?.mark_price)} · stable since{' '}
+          {current?.stable_since_at
+            ? new Date(current.stable_since_at).toLocaleString()
+            : '—'}
+        </div>
+      </div>
+      {factors.length > 0 ? (
+        <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-5">
+          {factors.map(([name, value]) => (
+            <DetailMetricCard
+              key={name}
+              label={name.toUpperCase()}
+              value={value}
+              tone="neutral"
+            />
+          ))}
+        </div>
+      ) : null}
+      <div className="border-t border-[rgba(25,36,52,0.14)] p-5">
+        <div className="mb-3 text-sm font-semibold text-nofx-text">
+          Direction changes
+        </div>
+        <div className="space-y-2">
+          {(history?.items || []).slice(0, 10).map((item, index) => (
+            <div
+              key={`${item.occurred_at || index}`}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-nofx-bg-deeper px-3 py-2 text-sm"
+            >
+              <span className="font-mono text-nofx-text">
+                {item.prev_bias || '—'} → {item.new_bias || '—'}
+              </span>
+              <span className="font-mono text-nofx-text-muted">
+                {formatPrice(item.mark_price)} ·{' '}
+                {item.occurred_at
+                  ? new Date(item.occurred_at).toLocaleString()
+                  : '—'}
+              </span>
+            </div>
+          ))}
+          {!history?.items?.length ? (
+            <div className="text-sm text-nofx-text-muted">
+              No direction-change history returned.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function binPrice(bin: VergexHeatmapBin) {
+  if (typeof bin.px === 'number') return bin.px
+  if (
+    typeof bin.bucketStartPrice === 'number' &&
+    typeof bin.bucketEndPrice === 'number'
+  ) {
+    return (bin.bucketStartPrice + bin.bucketEndPrice) / 2
+  }
+  return 0
+}
+
+function binValue(bin: VergexHeatmapBin) {
+  return (
+    Math.abs(bin.longCost || 0) +
+    Math.abs(bin.shortCost || 0) +
+    Math.abs(bin.longLiq || 0) +
+    Math.abs(bin.shortLiq || 0)
+  )
+}
+
+function sideBarWidth(value: number | undefined, maxValue: number) {
+  if (!value || !Number.isFinite(value) || maxValue <= 0) return '0%'
+  return `${Math.max(1.5, Math.min(46, (Math.abs(value) / maxValue) * 46))}%`
+}
+
+function ChartGridLines() {
+  return (
+    <div className="pointer-events-none absolute inset-y-0 left-[92px] right-0">
+      {[12.5, 25, 37.5, 50, 62.5, 75, 87.5].map((left) => (
+        <div
+          key={left}
+          className={`absolute top-0 h-full w-px ${
+            left === 50 ? 'bg-[rgba(25,36,52,0.24)]' : 'bg-nofx-bg-deeper'
+          }`}
+          style={{ left: `${left}%` }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function HeatmapChartRow({
+  bin,
+  maxLeft,
+  maxRight,
+  markPrice,
+}: {
+  bin: VergexHeatmapBin
+  maxLeft: number
+  maxRight: number
+  markPrice?: number
+}) {
+  const price = binPrice(bin)
+  const isCurrent =
+    typeof markPrice === 'number' &&
+    typeof bin.bucketStartPrice === 'number' &&
+    typeof bin.bucketEndPrice === 'number' &&
+    markPrice >= bin.bucketStartPrice &&
+    markPrice <= bin.bucketEndPrice
+
+  return (
+    <div
+      className="relative z-10 grid grid-cols-[78px_minmax(0,1fr)] items-center gap-3"
+      title={[
+        `Price ${formatPrice(price)}`,
+        `Long cost ${formatMoney(bin.longCost)}`,
+        `Short cost ${formatMoney(bin.shortCost)}`,
+        `Long liquidation ${formatMoney(bin.longLiq)}`,
+        `Short liquidation ${formatMoney(bin.shortLiq)}`,
+      ].join(' · ')}
+    >
+      <div
+        className={`text-right font-mono text-xs ${
+          isCurrent ? 'text-nofx-gold' : 'text-nofx-text-muted'
+        }`}
+      >
+        {formatPrice(price)}
+      </div>
+      <div
+        className={`relative h-6 overflow-visible rounded-xs ${
+          isCurrent ? 'bg-nofx-gold/10' : 'bg-nofx-bg-lighter'
+        }`}
+      >
+        {isCurrent ? (
+          <>
+            <div className="absolute inset-x-0 top-1/2 h-px bg-nofx-gold" />
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-nofx-gold px-2 py-1 font-mono text-xs font-bold text-nofx-bg">
+              Mark {formatPrice(markPrice)}
+            </div>
+          </>
+        ) : null}
+        <div
+          className="absolute right-1/2 top-[5px] h-2 rounded-l bg-nofx-danger/80"
+          style={{ width: sideBarWidth(bin.shortCost, maxLeft) }}
+        />
+        <div
+          className="absolute left-1/2 top-[5px] h-2 rounded-r bg-nofx-success/80"
+          style={{ width: sideBarWidth(bin.longCost, maxRight) }}
+        />
+        <div
+          className="absolute right-1/2 bottom-[5px] h-2 rounded-l bg-orange-400"
+          style={{ width: sideBarWidth(bin.longLiq, maxLeft) }}
+        />
+        <div
+          className="absolute left-1/2 bottom-[5px] h-2 rounded-r bg-nofx-gold"
+          style={{ width: sideBarWidth(bin.shortLiq, maxRight) }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function CostLiquidationHeatmap({
+  heatmap,
+}: {
+  heatmap: VergexHeatmapResponse | null
+}) {
+  const data = heatmap?.data
+  const bins = (data?.bins || [])
+    .filter((bin) => binValue(bin) > 0)
+    .slice()
+    .sort((a, b) => binPrice(b) - binPrice(a))
+
+  if (!data || bins.length === 0) {
+    return (
+      <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper p-4 text-sm text-nofx-text-muted">
+        Cost/liquidation heatmap has not loaded yet.
+      </div>
+    )
+  }
+
+  const maxLeft = Math.max(
+    ...bins.map((bin) =>
+      Math.max(Math.abs(bin.shortCost || 0), Math.abs(bin.longLiq || 0))
+    ),
+    1
+  )
+  const maxRight = Math.max(
+    ...bins.map((bin) =>
+      Math.max(Math.abs(bin.longCost || 0), Math.abs(bin.shortLiq || 0))
+    ),
+    1
+  )
+  const longLiqTotal = bins.reduce((sum, bin) => sum + (bin.longLiq || 0), 0)
+  const shortLiqTotal = bins.reduce((sum, bin) => sum + (bin.shortLiq || 0), 0)
+  const includedCost = data.cost?.includedPositions || data.costAddrs || 0
+  const includedLiq = data.liqAddrs || 0
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter shadow-lg">
+      <div className="border-b border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter px-5 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-base font-semibold text-nofx-text">
+              Cost / Liquidation Heatmap
+              <span className="ml-3 text-sm font-normal text-nofx-text-muted">
+                position cost distribution · liquidation clusters
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-3 text-sm text-nofx-text-muted">
+              <span>{includedCost.toLocaleString()} cost positions</span>
+              <span>{includedLiq.toLocaleString()} liquidation prices</span>
+              <span>
+                mark{' '}
+                <span className="font-semibold text-nofx-text">
+                  {formatPrice(data.markPrice)}
+                </span>
+              </span>
+            </div>
+            {data.liquidation?.reason ? (
+              <div className="mt-2 text-sm text-nofx-gold">
+                Liquidation prices use latest snapshot; incremental trades can
+                lag.
+              </div>
+            ) : null}
+          </div>
+          <div className="rounded-full bg-nofx-success/10 px-3 py-1 text-xs font-semibold text-nofx-success">
+            live
+          </div>
+        </div>
+      </div>
+
+      <div className="px-5 py-5">
+        <div className="mb-4 flex flex-wrap justify-center gap-4 text-sm text-nofx-text-muted">
+          <span className="inline-flex items-center gap-1">
+            <span className="h-3 w-3 rounded-sm bg-nofx-success/70" />
+            Long cost
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="h-3 w-3 rounded-sm bg-nofx-danger/70" />
+            Short cost
+          </span>
+          <span className="inline-flex items-center gap-1 text-orange-300">
+            <span className="h-3 w-3 rounded-sm bg-orange-400" />
+            Long liquidation
+          </span>
+          <span className="inline-flex items-center gap-1 text-nofx-gold">
+            <span className="h-3 w-3 rounded-sm bg-nofx-gold" />
+            Short liquidation
+          </span>
+        </div>
+
+        <div className="relative rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper px-4 py-5">
+          <ChartGridLines />
+          <div className="relative z-10 max-h-[720px] space-y-1 overflow-y-auto pr-2">
+            {bins.map((bin, index) => (
+              <HeatmapChartRow
+                key={`${binPrice(bin)}-${index}`}
+                bin={bin}
+                maxLeft={maxLeft}
+                maxRight={maxRight}
+                markPrice={data.markPrice}
+              />
+            ))}
+          </div>
+          <div className="relative z-10 mt-4 grid grid-cols-[78px_minmax(0,1fr)] items-center gap-3 text-xs text-nofx-text-muted">
+            <div />
+            <div className="grid grid-cols-5 font-mono">
+              <span>{formatMoney(maxLeft)}</span>
+              <span className="text-center">{formatMoney(maxLeft / 2)}</span>
+              <span className="text-center">$0</span>
+              <span className="text-center">{formatMoney(maxRight / 2)}</span>
+              <span className="text-right">{formatMoney(maxRight)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <DetailMetricCard
+            label="Flush fuel below"
+            value={formatMoney(longLiqTotal)}
+            note="Long liquidations can force sell into downside breaks."
+            tone="red"
+          />
+          <DetailMetricCard
+            label="Squeeze fuel above"
+            value={formatMoney(shortLiqTotal)}
+            note="Short liquidations can force buy into upside breaks."
+            tone="cyan"
+          />
+          <DetailMetricCard
+            label="Bin step"
+            value={formatNumber(data.binStep, 4)}
+            note={`${bins.length} active price bins returned.`}
+            tone="neutral"
+          />
+        </div>
+      </div>
+    </section>
+  )
+}
 
 export function StrategyStudioPage() {
   const { token } = useAuth()
   const { language } = useLanguage()
-
+  const navigate = useNavigate()
   const [strategies, setStrategies] = useState<Strategy[]>([])
-  const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(null)
-  const [editingConfig, setEditingConfig] = useState<StrategyConfig | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSaving, setIsSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [selectedStrategy, setSelectedStrategy] = useState<Strategy | null>(
+    null
+  )
+  const [editingConfig, setEditingConfig] = useState<StrategyConfig | null>(
+    null
+  )
+  const [symbols, setSymbols] = useState<MarketSymbol[]>([])
+  const [signals, setSignals] = useState<VergexSignalItem[]>([])
+  const [detailSignal, setDetailSignal] = useState<VergexSignalItem | null>(
+    null
+  )
+  const [directionCurrent, setDirectionCurrent] =
+    useState<VergexDirectionCurrentResponse | null>(null)
+  const [directionHistory, setDirectionHistory] =
+    useState<VergexDirectionHistoryResponse | null>(null)
+  const [heatmap, setHeatmap] = useState<VergexHeatmapResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [symbolsLoading, setSymbolsLoading] = useState(false)
+  const [symbolsError, setSymbolsError] = useState('')
+  const [signalsLoading, setSignalsLoading] = useState(false)
+  const [signalsError, setSignalsError] = useState('')
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
+  const [detailLiqBand, setDetailLiqBand] = useState('15')
+  const [listMode, setListMode] = useState<ListMode>('claw402')
   const [hasChanges, setHasChanges] = useState(false)
 
-  // AI Models for test run
-  const [aiModels, setAiModels] = useState<AIModel[]>([])
-  const [selectedModelId, setSelectedModelId] = useState<string>('')
+  const aiConfig = editingConfig?.ai_config || null
+  const coinSource = aiConfig?.coin_source
+  const indicators = aiConfig?.indicators
+  const risk = aiConfig?.risk_control
+  const selectedSymbols = coinSource?.static_coins || []
+  const scope = 'all' as Scope
+  const activeProfile = profileFromRisk(risk)
 
-  // Accordion states for left panel
-  const [expandedSections, setExpandedSections] = useState({
-    coinSource: true,
-    indicators: false,
-    riskControl: false,
-    promptSections: false,
-    customPrompt: false,
-    publishSettings: false,
-  })
-
-  // Right panel states
-  const [activeRightTab, setActiveRightTab] = useState<'prompt' | 'test'>('prompt')
-  const [promptPreview, setPromptPreview] = useState<{
-    system_prompt: string
-    user_prompt?: string
-    prompt_variant: string
-    config_summary: Record<string, unknown>
-  } | null>(null)
-  const [isLoadingPrompt, setIsLoadingPrompt] = useState(false)
-  const [selectedVariant, setSelectedVariant] = useState('balanced')
-
-  // AI Test Run states
-  const [aiTestResult, setAiTestResult] = useState<{
-    system_prompt?: string
-    user_prompt?: string
-    ai_response?: string
-    reasoning?: string
-    decisions?: unknown[]
-    error?: string
-    duration_ms?: number
-  } | null>(null)
-  const [isRunningAiTest, setIsRunningAiTest] = useState(false)
-
-  const toggleSection = (section: keyof typeof expandedSections) => {
-    setExpandedSections((prev) => ({
-      ...prev,
-      [section]: !prev[section],
-    }))
-  }
-
-  // Fetch AI Models
-  const fetchAiModels = useCallback(async () => {
-    if (!token) return
-    try {
-      const response = await fetch(`${API_BASE}/api/models`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (response.ok) {
-        const data = await response.json()
-        // 后端返回的是数组，不是 { models: [] }
-        const allModels = Array.isArray(data) ? data : (data.models || [])
-        const enabledModels = allModels.filter((m: AIModel) => m.enabled)
-        setAiModels(enabledModels)
-        if (enabledModels.length > 0 && !selectedModelId) {
-          setSelectedModelId(enabledModels[0].id)
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch AI models:', err)
+  const signalMap = useMemo(() => {
+    const map = new Map<string, VergexSignalItem>()
+    for (const item of signals) {
+      map.set(normalizeSymbol(item.symbol), item)
     }
-  }, [token, selectedModelId])
+    return map
+  }, [signals])
 
-  // Fetch strategies
-  const fetchStrategies = useCallback(async () => {
-    if (!token) return
-    try {
-      const response = await fetch(`${API_BASE}/api/strategies`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!response.ok) throw new Error('Failed to fetch strategies')
-      const data = await response.json()
-      setStrategies(data.strategies || [])
+  const visibleSymbols = useMemo(() => {
+    const tradefi = symbols.filter((item) => item.category !== 'crypto')
+    const scoped =
+      scope === 'all'
+        ? tradefi
+        : tradefi.filter((item) => item.category === scope)
+    return [...scoped].sort((a, b) => {
+      const aSignal = signalMap.get(normalizeSymbol(a.symbol))
+      const bSignal = signalMap.get(normalizeSymbol(b.symbol))
+      const aRank = aSignal?.rank || Number.MAX_SAFE_INTEGER
+      const bRank = bSignal?.rank || Number.MAX_SAFE_INTEGER
+      if (aRank !== bRank) return aRank - bRank
+      return (b.volume_24h || 0) - (a.volume_24h || 0)
+    })
+  }, [scope, signalMap, symbols])
 
-      // Select active or first strategy
-      const active = data.strategies?.find((s: Strategy) => s.is_active)
-      if (active) {
-        setSelectedStrategy(active)
-        setEditingConfig(active.config)
-      } else if (data.strategies?.length > 0) {
-        setSelectedStrategy(data.strategies[0])
-        setEditingConfig(data.strategies[0].config)
+  const visibleSignalItems = useMemo(() => {
+    const scoped =
+      scope === 'all'
+        ? signals
+        : signals.filter((item) => item.category === scope)
+    return scoped.slice().sort(compareSignalItems)
+  }, [scope, signals])
+
+  const selectedSet = useMemo(
+    () => new Set(selectedSymbols.map(normalizeSymbol)),
+    [selectedSymbols]
+  )
+
+  const loadStrategies = useCallback(
+    async (preferredStrategyId?: string) => {
+      if (!token) return
+      setLoading(true)
+      try {
+        const result = await api.getStrategies()
+        setStrategies(result)
+        const next =
+          (preferredStrategyId
+            ? result.find((item) => item.id === preferredStrategyId)
+            : null) ||
+          result.find((item) => item.is_active) ||
+          result[0] ||
+          null
+        setSelectedStrategy(next)
+        setEditingConfig(next ? simplifyConfig(next.config) : null)
+        setHasChanges(false)
+      } catch (err) {
+        notify.error(
+          err instanceof Error ? err.message : 'Failed to load strategies'
+        )
+      } finally {
+        setLoading(false)
       }
+    },
+    [token]
+  )
+
+  const loadSymbols = useCallback(async () => {
+    setSymbolsLoading(true)
+    setSymbolsError('')
+    try {
+      const result = await api.getSymbols('hyperliquid-xyz')
+      setSymbols(result.symbols || [])
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      setSymbolsError(
+        err instanceof Error ? err.message : 'Symbol list unavailable'
+      )
     } finally {
-      setIsLoading(false)
+      setSymbolsLoading(false)
+    }
+  }, [])
+
+  const loadSignals = useCallback(async () => {
+    if (!token) return
+    setSignalsLoading(true)
+    setSignalsError('')
+    try {
+      const result =
+        await api.getVergexDirectionChangeLeaderboard(claw402BoardLimit)
+      setSignals(result.items || [])
+      setListMode('claw402')
+    } catch (err) {
+      setSignalsError(
+        err instanceof Error ? err.message : 'Claw402.ai board unavailable'
+      )
+    } finally {
+      setSignalsLoading(false)
     }
   }, [token])
 
-  useEffect(() => {
-    fetchStrategies()
-    fetchAiModels()
-  }, [fetchStrategies, fetchAiModels])
-
-  // Track previous language to detect actual changes
-  const prevLanguageRef = useRef(language)
-
-  // When language changes, update prompt sections to match the new language
-  useEffect(() => {
-    const updatePromptSectionsForLanguage = async () => {
-      // Only update if language actually changed (not on initial mount)
-      if (prevLanguageRef.current === language) return
-      prevLanguageRef.current = language
-
+  const loadSignalDetail = useCallback(
+    async (item: VergexSignalItem, bandOverride?: string) => {
       if (!token) return
-
-      try {
-        // Fetch default config for the new language
-        const response = await fetch(
-          `${API_BASE}/api/strategies/default-config?lang=${language}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        )
-        if (!response.ok) return
-        const defaultConfig = await response.json()
-
-        // Update only the prompt sections and language field
-        setEditingConfig(prev => {
-          if (!prev) return prev
-          return {
-            ...prev,
-            language: language as 'zh' | 'en',
-            prompt_sections: defaultConfig.prompt_sections,
-          }
-        })
-        setHasChanges(true)
-      } catch (err) {
-        console.error('Failed to update prompt sections for language:', err)
+      const nextBand =
+        bandOverride || detailLiqBand || coinSource?.vergex_liq_band || '15'
+      const params = {
+        marketType: signalMarketType(item),
+        symbol: strategySymbolForSignal(item),
+        chain: 'mainnet',
+        liqBand: nextBand,
       }
-    }
 
-    updatePromptSectionsForLanguage()
-  }, [language, token]) // Only trigger when language changes
+      setDetailLiqBand(nextBand)
+      setDetailSignal(item)
+      setDirectionCurrent(null)
+      setDirectionHistory(null)
+      setHeatmap(null)
+      setDetailError('')
+      setDetailLoading(true)
 
-  // Create new strategy
-  const handleCreateStrategy = async () => {
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById('claw402-detail-panel')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+
+      const [currentResult, historyResult, heatmapResult] =
+        await Promise.allSettled([
+          api.getVergexDirectionChangeCurrent(item.symbol),
+          api.getVergexDirectionChangeHistory(item.symbol, 'all', 1, 20),
+          api.getVergexCostLiquidationHeatmap(params),
+        ])
+
+      const errors: string[] = []
+      if (currentResult.status === 'fulfilled') {
+        setDirectionCurrent(currentResult.value)
+      } else {
+        errors.push(
+          `Current direction: ${
+            currentResult.reason instanceof Error
+              ? currentResult.reason.message
+              : 'unavailable'
+          }`
+        )
+      }
+
+      if (historyResult.status === 'fulfilled') {
+        setDirectionHistory(historyResult.value)
+      } else {
+        errors.push(
+          `Direction history: ${historyResult.reason instanceof Error ? historyResult.reason.message : 'unavailable'}`
+        )
+      }
+
+      if (heatmapResult.status === 'fulfilled') {
+        setHeatmap(heatmapResult.value)
+      } else {
+        errors.push(
+          `Heatmap: ${
+            heatmapResult.reason instanceof Error
+              ? heatmapResult.reason.message
+              : 'unavailable'
+          }`
+        )
+      }
+
+      setDetailError(errors.join(' · '))
+      setDetailLoading(false)
+    },
+    [coinSource?.vergex_liq_band, detailLiqBand, token]
+  )
+
+  useEffect(() => {
+    void loadStrategies()
+    void loadSymbols()
+    void loadSignals()
+  }, [loadStrategies, loadSymbols, loadSignals])
+
+  const patchAI = (patch: Partial<AIStrategyConfig>) => {
+    setEditingConfig((prev) => {
+      const base = simplifyConfig(prev)
+      return {
+        ...base,
+        language: language as 'zh' | 'en',
+        ai_config: {
+          ...base.ai_config!,
+          ...patch,
+        },
+      }
+    })
+    setHasChanges(true)
+  }
+
+  const patchCoinSource = (patch: Partial<CoinSourceConfig>) => {
+    patchAI({
+      coin_source: defaultCoinSource({
+        ...coinSource,
+        ...patch,
+      }),
+    })
+  }
+
+  const patchIndicators = (patch: Partial<IndicatorConfig>) => {
+    patchAI({
+      indicators: defaultIndicators({
+        ...indicators,
+        ...patch,
+      }),
+    })
+  }
+
+  const patchRisk = (patch: Partial<RiskControlConfig>) => {
+    patchAI({
+      risk_control: defaultRisk({
+        ...risk,
+        ...patch,
+      }),
+    })
+  }
+
+  const createStrategy = async () => {
     if (!token) return
     try {
-      const configResponse = await fetch(
+      const response = await fetch(
         `${API_BASE}/api/strategies/default-config?lang=${language}`,
         { headers: { Authorization: `Bearer ${token}` } }
       )
-      const defaultConfig = await configResponse.json()
-
-      const response = await fetch(`${API_BASE}/api/strategies`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          name: language === 'zh' ? '新策略' : 'New Strategy',
-          description: '',
-          config: defaultConfig,
+      const defaultConfig = response.ok
+        ? simplifyConfig(await response.json())
+        : simplifyConfig(null)
+      defaultConfig.language = language as 'zh' | 'en'
+      defaultConfig.ai_config = {
+        ...defaultConfig.ai_config!,
+        coin_source: defaultCoinSource({
+          ...defaultConfig.ai_config?.coin_source,
+          static_coins: [],
+          hyper_rank_category: 'all',
+          vergex_limit: 10,
+          vergex_market_type: 'all',
         }),
-      })
-      if (!response.ok) throw new Error('Failed to create strategy')
-      const result = await response.json()
-      await fetchStrategies()
-      // Auto-select the newly created strategy
-      if (result.id) {
-        const now = new Date().toISOString()
-        const newStrategy = {
-          id: result.id,
-          name: language === 'zh' ? '新策略' : 'New Strategy',
-          description: '',
-          is_active: false,
-          is_default: false,
-          is_public: false,
-          config_visible: true,
-          config: defaultConfig,
-          created_at: now,
-          updated_at: now,
-        }
-        setSelectedStrategy(newStrategy)
-        setEditingConfig(defaultConfig)
-        setHasChanges(false)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    }
-  }
-
-  // Delete strategy
-  const handleDeleteStrategy = async (id: string) => {
-    if (!token) return
-
-    const confirmed = await confirmToast(
-      language === 'zh' ? '确定删除此策略？' : 'Delete this strategy?',
-      {
-        title: language === 'zh' ? '确认删除' : 'Confirm Delete',
-        okText: language === 'zh' ? '删除' : 'Delete',
-        cancelText: language === 'zh' ? '取消' : 'Cancel',
-      }
-    )
-    if (!confirmed) return
-
-    try {
-      const response = await fetch(`${API_BASE}/api/strategies/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!response.ok) throw new Error('Failed to delete strategy')
-      notify.success(language === 'zh' ? '策略已删除' : 'Strategy deleted')
-      // Clear selection if deleted strategy was selected
-      if (selectedStrategy?.id === id) {
-        setSelectedStrategy(null)
-        setEditingConfig(null)
-        setHasChanges(false)
-      }
-      await fetchStrategies()
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error'
-      setError(errorMsg)
-      notify.error(errorMsg)
-    }
-  }
-
-  // Duplicate strategy
-  const handleDuplicateStrategy = async (id: string) => {
-    if (!token) return
-    try {
-      const response = await fetch(`${API_BASE}/api/strategies/${id}/duplicate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          name: language === 'zh' ? '策略副本' : 'Strategy Copy',
+        indicators: defaultIndicators({
+          ...defaultConfig.ai_config?.indicators,
+          klines: {
+            primary_timeframe: '15m',
+            primary_count: 30,
+            enable_multi_timeframe: false,
+            selected_timeframes: ['15m'],
+          },
         }),
-      })
-      if (!response.ok) throw new Error('Failed to duplicate strategy')
-      await fetchStrategies()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    }
-  }
-
-  // Activate strategy
-  const handleActivateStrategy = async (id: string) => {
-    if (!token) return
-    try {
-      const response = await fetch(`${API_BASE}/api/strategies/${id}/activate`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!response.ok) throw new Error('Failed to activate strategy')
-      await fetchStrategies()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    }
-  }
-
-  // Export strategy as JSON file
-  const handleExportStrategy = (strategy: Strategy) => {
-    const exportData = {
-      name: strategy.name,
-      description: strategy.description,
-      config: strategy.config,
-      exported_at: new Date().toISOString(),
-      version: '1.0',
-    }
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `strategy_${strategy.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.json`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    notify.success(language === 'zh' ? '策略已导出' : 'Strategy exported')
-  }
-
-  // Import strategy from JSON file
-  const handleImportStrategy = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file || !token) return
-
-    try {
-      const text = await file.text()
-      const importData = JSON.parse(text)
-
-      // Validate imported data
-      if (!importData.config || !importData.name) {
-        throw new Error(language === 'zh' ? '无效的策略文件' : 'Invalid strategy file')
-      }
-
-      // Create new strategy with imported config
-      const response = await fetch(`${API_BASE}/api/strategies`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          name: `${importData.name} (${language === 'zh' ? '导入' : 'Imported'})`,
-          description: importData.description || '',
-          config: importData.config,
+        risk_control: defaultRisk({
+          ...defaultConfig.ai_config?.risk_control,
+          max_positions: 8,
+          btc_eth_max_leverage: 10,
+          altcoin_max_leverage: 10,
+          btc_eth_max_position_value_ratio: 5,
+          altcoin_max_position_value_ratio: 5,
+          max_margin_usage: 1.0,
+          min_confidence: 78,
+          min_risk_reward_ratio: 3,
         }),
+        custom_prompt:
+          'NOFX Autopilot reads the Claw402.ai direction board each cycle, loads direction history and cost/liquidation structure, and holds each position until its board direction changes.',
+        prompt_sections: undefined,
+      }
+      const created = await api.createStrategy({
+        name: text(
+          language,
+          'NOFX Claw402 Auto Strategy',
+          'NOFX Claw402 Auto Strategy'
+        ),
+        description: text(
+          language,
+          'The single built-in strategy: read the Claw402.ai board, fetch per-symbol details, then trade with raw candles.',
+          'The single built-in strategy: read the Claw402.ai board, fetch per-symbol details, then trade with raw candles.'
+        ),
+        config: defaultConfig,
       })
-      if (!response.ok) throw new Error('Failed to import strategy')
-
-      notify.success(language === 'zh' ? '策略已导入' : 'Strategy imported')
-      await fetchStrategies()
+      await loadStrategies(created.id)
+      setHasChanges(false)
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error'
-      notify.error(errorMsg)
-    } finally {
-      // Reset file input
-      event.target.value = ''
+      notify.error(
+        err instanceof Error ? err.message : 'Failed to create strategy'
+      )
     }
   }
 
-  // Save strategy
-  const handleSaveStrategy = async () => {
-    if (!token || !selectedStrategy || !editingConfig) return
-    setIsSaving(true)
+  const saveStrategy = async (
+    activateAfter = false,
+    overrideConfig?: StrategyConfig,
+    successMessage?: string
+  ) => {
+    if (!token || !selectedStrategy || (!editingConfig && !overrideConfig))
+      return
+    setSaving(true)
     try {
-      // Always sync the config language with the current interface language
-      const configWithLanguage = {
-        ...editingConfig,
-        language: language as 'zh' | 'en',
-      }
+      const config = simplifyConfig(overrideConfig || editingConfig)
+      config.language = language as 'zh' | 'en'
       const response = await fetch(
         `${API_BASE}/api/strategies/${selectedStrategy.id}`,
         {
@@ -392,713 +1131,1026 @@ export function StrategyStudioPage() {
           body: JSON.stringify({
             name: selectedStrategy.name,
             description: selectedStrategy.description,
-            config: configWithLanguage,
+            config,
             is_public: selectedStrategy.is_public,
             config_visible: selectedStrategy.config_visible,
           }),
         }
       )
       if (!response.ok) throw new Error('Failed to save strategy')
+      if (activateAfter) {
+        await api.activateStrategy(selectedStrategy.id)
+      }
       setHasChanges(false)
-      notify.success(language === 'zh' ? '策略已保存' : 'Strategy saved')
-      await fetchStrategies()
+      notify.success(
+        successMessage ||
+          (activateAfter
+            ? text(
+                language,
+                'Strategy saved and activated',
+                'Strategy saved and activated'
+              )
+            : text(language, 'Strategy saved', 'Strategy saved'))
+      )
+      await loadStrategies(selectedStrategy.id)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      notify.error(
+        err instanceof Error ? err.message : 'Failed to save strategy'
+      )
     } finally {
-      setIsSaving(false)
+      setSaving(false)
     }
   }
 
-  // Update config section
-  const updateConfig = <K extends keyof StrategyConfig>(
-    section: K,
-    value: StrategyConfig[K]
-  ) => {
-    if (!editingConfig) return
-    setEditingConfig({
-      ...editingConfig,
-      [section]: value,
+  const buildUnifiedClaw402Config = (): StrategyConfig => {
+    const base = simplifyConfig(editingConfig)
+    base.language = language as 'zh' | 'en'
+    base.ai_config = {
+      ...base.ai_config!,
+      coin_source: defaultCoinSource({
+        ...base.ai_config?.coin_source,
+        static_coins: [],
+        hyper_rank_category: 'all',
+        vergex_limit: 10,
+        vergex_market_type: 'all',
+        vergex_chain: 'hyperliquid',
+      }),
+      indicators: defaultIndicators({
+        ...base.ai_config?.indicators,
+        klines: {
+          primary_timeframe: '15m',
+          primary_count: 30,
+          enable_multi_timeframe: false,
+          selected_timeframes: ['15m'],
+        },
+      }),
+      risk_control: defaultRisk({
+        ...base.ai_config?.risk_control,
+        max_positions: 8,
+        btc_eth_max_leverage: 10,
+        altcoin_max_leverage: 10,
+        // Five times equity is the hard per-position cap; allocation is dynamic.
+        btc_eth_max_position_value_ratio: 5,
+        altcoin_max_position_value_ratio: 5,
+        max_margin_usage: 1.0,
+        min_confidence: 78,
+        min_risk_reward_ratio: 3,
+      }),
+      custom_prompt:
+        'Run NOFX Autopilot: use the Claw402.ai direction board as the candidate universe, open in the board direction, and hold until that direction changes, becomes neutral, or disappears.',
+      prompt_sections: undefined,
+    }
+    return base
+  }
+
+  const startUnifiedClaw402Agent = async () => {
+    if (!selectedStrategy) return
+
+    setSaving(true)
+    try {
+      // The shared launcher runs the server-side preflight (fresh wallet and
+      // exchange balances) BEFORE ensureStrategy, so a failed launch never
+      // mutates or activates the strategy as a side effect.
+      const outcome = await launchAutopilot({
+        scanIntervalMinutes: 15,
+        ensureStrategy: async () => {
+          const config = buildUnifiedClaw402Config()
+          setEditingConfig(config)
+          await api.updateStrategy(selectedStrategy.id, {
+            name: selectedStrategy.name,
+            description:
+              selectedStrategy.description ||
+              'Autonomous market selection powered by the live Claw402.ai direction board.',
+            config,
+          })
+          await api.activateStrategy(selectedStrategy.id)
+          return selectedStrategy.id
+        },
+      })
+
+      if (!outcome.ok) {
+        notify.error(outcome.message)
+        const setupTarget =
+          outcome.kind === 'error' ? null : outcome.setupTarget
+        if (setupTarget) {
+          navigate(`${ROUTES.traders}?setup=${setupTarget}`)
+        }
+        return
+      }
+
+      if (outcome.warning) {
+        notify.warning(outcome.warning)
+      }
+      notify.success('NOFX Autopilot started')
+      setHasChanges(false)
+      await loadStrategies(selectedStrategy.id)
+      navigate(buildDashboardPath(outcome.traderId))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const activateStrategy = async () => {
+    if (!selectedStrategy) return
+    try {
+      await api.activateStrategy(selectedStrategy.id)
+      notify.success(text(language, 'Strategy activated', 'Strategy activated'))
+      await loadStrategies(selectedStrategy.id)
+    } catch (err) {
+      notify.error(
+        err instanceof Error ? err.message : 'Failed to activate strategy'
+      )
+    }
+  }
+
+  const deleteStrategy = async () => {
+    if (!selectedStrategy || selectedStrategy.is_active) return
+    const ok = await confirmToast(
+      text(language, 'Delete this strategy?', 'Delete this strategy?'),
+      {
+        title: text(language, 'Confirm delete', 'Confirm delete'),
+        okText: text(language, 'Delete', 'Delete'),
+        cancelText: text(language, 'Cancel', 'Cancel'),
+      }
+    )
+    if (!ok) return
+    try {
+      await api.deleteStrategy(selectedStrategy.id)
+      notify.success(text(language, 'Strategy deleted', 'Strategy deleted'))
+      await loadStrategies()
+    } catch (err) {
+      notify.error(
+        err instanceof Error ? err.message : 'Failed to delete strategy'
+      )
+    }
+  }
+
+  const toggleSymbol = (symbol: string) => {
+    const normalized = normalizeSymbol(symbol)
+    const next = selectedSet.has(normalized)
+      ? selectedSymbols.filter((item) => normalizeSymbol(item) !== normalized)
+      : [...selectedSymbols, symbol].slice(0, 10)
+    const nextLimit =
+      next.length > 0
+        ? Math.min(next.length, 10)
+        : Math.min(Math.max(coinSource?.vergex_limit || 5, 5), 10)
+    patchCoinSource({
+      static_coins: next,
+      vergex_limit: nextLimit,
+      vergex_market_type: 'all',
+    })
+  }
+
+  const setScope = (nextScope: Scope) => {
+    patchCoinSource({
+      hyper_rank_category: nextScope,
+      static_coins: [],
+      vergex_market_type: 'all',
+    })
+  }
+
+  const setTimeframe = (timeframe: string) => {
+    patchIndicators({
+      klines: {
+        primary_timeframe: timeframe,
+        primary_count: indicators?.klines.primary_count || 30,
+        enable_multi_timeframe: false,
+        selected_timeframes: [timeframe],
+      },
+    })
+  }
+
+  const setBarCount = (count: number) => {
+    patchIndicators({
+      klines: {
+        primary_timeframe: indicators?.klines.primary_timeframe || '15m',
+        primary_count: count,
+        enable_multi_timeframe: false,
+        selected_timeframes: [indicators?.klines.primary_timeframe || '15m'],
+      },
+    })
+  }
+
+  const setLeverage = (leverage: number) => {
+    patchRisk({
+      btc_eth_max_leverage: leverage,
+      altcoin_max_leverage: leverage,
+    })
+  }
+
+  const applyProfile = (profile: (typeof profileOptions)[number]) => {
+    setEditingConfig((prev) => {
+      const base = simplifyConfig(prev)
+      const currentAI = base.ai_config!
+      return {
+        ...base,
+        language: language as 'zh' | 'en',
+        ai_config: {
+          ...currentAI,
+          coin_source: defaultCoinSource({
+            ...currentAI.coin_source,
+            vergex_limit: profile.topN,
+          }),
+          indicators: defaultIndicators({
+            ...currentAI.indicators,
+            klines: {
+              primary_timeframe: profile.timeframe,
+              primary_count: profile.bars,
+              enable_multi_timeframe: false,
+              selected_timeframes: [profile.timeframe],
+            },
+          }),
+          risk_control: defaultRisk({
+            ...currentAI.risk_control,
+            max_positions: profile.maxPositions,
+            btc_eth_max_leverage: profile.leverage,
+            altcoin_max_leverage: profile.leverage,
+            max_margin_usage: profile.margin,
+            min_confidence: profile.confidence,
+          }),
+          custom_prompt: text(language, profile.promptZh, profile.promptEn),
+          prompt_sections: undefined,
+        },
+      }
     })
     setHasChanges(true)
   }
 
-  // Fetch prompt preview
-  const fetchPromptPreview = async () => {
-    if (!token || !editingConfig) return
-    setIsLoadingPrompt(true)
-    try {
-      const response = await fetch(`${API_BASE}/api/strategies/preview-prompt`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          config: editingConfig,
-          account_equity: 1000,
-          prompt_variant: selectedVariant,
-        }),
-      })
-      if (!response.ok) throw new Error('Failed to fetch prompt preview')
-      const data = await response.json()
-      setPromptPreview(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setIsLoadingPrompt(false)
-    }
-  }
-
-  // Run AI test with real AI model
-  const runAiTest = async () => {
-    if (!token || !editingConfig || !selectedModelId) return
-    setIsRunningAiTest(true)
-    setAiTestResult(null)
-    try {
-      const response = await fetch(`${API_BASE}/api/strategies/test-run`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          config: editingConfig,
-          prompt_variant: selectedVariant,
-          ai_model_id: selectedModelId,
-          run_real_ai: true,
-        }),
-      })
-      if (!response.ok) throw new Error('Failed to run AI test')
-      const data = await response.json()
-      setAiTestResult(data)
-    } catch (err) {
-      setAiTestResult({
-        error: err instanceof Error ? err.message : 'Unknown error',
-      })
-    } finally {
-      setIsRunningAiTest(false)
-    }
-  }
-
-  const t = (key: string) => {
-    const translations: Record<string, Record<string, string>> = {
-      strategyStudio: { zh: '策略工作室', en: 'Strategy Studio' },
-      subtitle: { zh: '可视化配置和测试交易策略', en: 'Configure and test trading strategies' },
-      strategies: { zh: '策略', en: 'Strategies' },
-      newStrategy: { zh: '新建', en: 'New' },
-      coinSource: { zh: '币种来源', en: 'Coin Source' },
-      indicators: { zh: '技术指标', en: 'Indicators' },
-      riskControl: { zh: '风控参数', en: 'Risk Control' },
-      promptSections: { zh: 'Prompt 编辑', en: 'Prompt Editor' },
-      customPrompt: { zh: '附加提示', en: 'Extra Prompt' },
-      save: { zh: '保存', en: 'Save' },
-      saving: { zh: '保存中...', en: 'Saving...' },
-      activate: { zh: '激活', en: 'Activate' },
-      active: { zh: '激活中', en: 'Active' },
-      default: { zh: '默认', en: 'Default' },
-      promptPreview: { zh: 'Prompt 预览', en: 'Prompt Preview' },
-      aiTestRun: { zh: 'AI 测试', en: 'AI Test' },
-      systemPrompt: { zh: 'System Prompt', en: 'System Prompt' },
-      userPrompt: { zh: 'User Prompt', en: 'User Prompt' },
-      loadPrompt: { zh: '生成 Prompt', en: 'Generate Prompt' },
-      refreshPrompt: { zh: '刷新', en: 'Refresh' },
-      promptVariant: { zh: '风格', en: 'Style' },
-      balanced: { zh: '平衡', en: 'Balanced' },
-      aggressive: { zh: '激进', en: 'Aggressive' },
-      conservative: { zh: '保守', en: 'Conservative' },
-      selectModel: { zh: '选择 AI 模型', en: 'Select AI Model' },
-      runTest: { zh: '运行 AI 测试', en: 'Run AI Test' },
-      running: { zh: '运行中...', en: 'Running...' },
-      aiOutput: { zh: 'AI 输出', en: 'AI Output' },
-      reasoning: { zh: '思维链', en: 'Reasoning' },
-      decisions: { zh: '决策', en: 'Decisions' },
-      duration: { zh: '耗时', en: 'Duration' },
-      noModel: { zh: '请先配置 AI 模型', en: 'Please configure AI model first' },
-      testNote: { zh: '使用真实 AI 模型测试，不执行交易', en: 'Test with real AI, no trading' },
-      publishSettings: { zh: '发布设置', en: 'Publish' },
-    }
-    return translations[key]?.[language] || key
-  }
-
-  if (isLoading) {
+  if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[70vh]">
-        <div className="text-center">
-          <div className="relative">
-            <div className="w-16 h-16 rounded-full border-4 border-yellow-500/20 border-t-yellow-500 animate-spin" />
-            <Zap className="w-6 h-6 text-yellow-500 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-          </div>
-        </div>
+      <div className="flex min-h-[70vh] items-center justify-center">
+        <Loader2 className="h-7 w-7 animate-spin text-nofx-gold" />
       </div>
     )
   }
 
-  const configSections = [
-    {
-      key: 'coinSource' as const,
-      icon: Target,
-      color: '#F0B90B',
-      title: t('coinSource'),
-      content: editingConfig && (
-        <CoinSourceEditor
-          config={editingConfig.coin_source}
-          onChange={(coinSource) => updateConfig('coin_source', coinSource)}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-    {
-      key: 'indicators' as const,
-      icon: BarChart3,
-      color: '#0ECB81',
-      title: t('indicators'),
-      content: editingConfig && (
-        <IndicatorEditor
-          config={editingConfig.indicators}
-          onChange={(indicators) => updateConfig('indicators', indicators)}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-    {
-      key: 'riskControl' as const,
-      icon: Shield,
-      color: '#F6465D',
-      title: t('riskControl'),
-      content: editingConfig && (
-        <RiskControlEditor
-          config={editingConfig.risk_control}
-          onChange={(riskControl) => updateConfig('risk_control', riskControl)}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-    {
-      key: 'promptSections' as const,
-      icon: FileText,
-      color: '#a855f7',
-      title: t('promptSections'),
-      content: editingConfig && (
-        <PromptSectionsEditor
-          config={editingConfig.prompt_sections}
-          onChange={(promptSections) => updateConfig('prompt_sections', promptSections)}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-    {
-      key: 'customPrompt' as const,
-      icon: Settings,
-      color: '#60a5fa',
-      title: t('customPrompt'),
-      content: editingConfig && (
-        <div>
-          <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
-            {language === 'zh' ? '附加在 System Prompt 末尾的额外提示，用于补充个性化交易风格' : 'Extra prompt appended to System Prompt for personalized trading style'}
-          </p>
-          <textarea
-            value={editingConfig.custom_prompt || ''}
-            onChange={(e) => updateConfig('custom_prompt', e.target.value)}
-            disabled={selectedStrategy?.is_default}
-            placeholder={language === 'zh' ? '输入自定义提示词...' : 'Enter custom prompt...'}
-            className="w-full h-32 px-3 py-2 rounded-lg resize-none font-mono text-xs"
-            style={{ background: '#0B0E11', border: '1px solid #2B3139', color: '#EAECEF' }}
-          />
-        </div>
-      ),
-    },
-    {
-      key: 'publishSettings' as const,
-      icon: Globe,
-      color: '#0ECB81',
-      title: t('publishSettings'),
-      content: selectedStrategy && (
-        <PublishSettingsEditor
-          isPublic={selectedStrategy.is_public ?? false}
-          configVisible={selectedStrategy.config_visible ?? true}
-          onIsPublicChange={(value) => {
-            setSelectedStrategy({ ...selectedStrategy, is_public: value })
-            setHasChanges(true)
-          }}
-          onConfigVisibleChange={(value) => {
-            setSelectedStrategy({ ...selectedStrategy, config_visible: value })
-            setHasChanges(true)
-          }}
-          disabled={selectedStrategy?.is_default}
-          language={language}
-        />
-      ),
-    },
-  ]
-
   return (
-    <DeepVoidBackground className="h-[calc(100vh-64px)] flex flex-col bg-nofx-bg relative overflow-hidden">
-
-      {/* Header */}
-      {/* Header */}
-      <div className="flex-shrink-0 px-4 py-3 border-b border-nofx-gold/20 bg-nofx-bg/60 backdrop-blur-md z-10">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-gradient-to-br from-nofx-gold to-yellow-500">
-              <Sparkles className="w-5 h-5 text-black" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-nofx-text">{t('strategyStudio')}</h1>
-              <p className="text-xs text-nofx-text-muted">{t('subtitle')}</p>
-            </div>
+    <DeepVoidBackground className="nofx-strategy min-h-[calc(100vh-72px)] bg-nofx-bg">
+      <div className="nofx-strategy-heading border-b border-[rgba(25,36,52,0.14)] bg-nofx-bg px-5 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold text-nofx-text">
+              {text(language, 'NOFX Autopilot', 'NOFX Autopilot')}
+            </h1>
+            <p className="mt-1 text-sm text-nofx-text-muted">
+              {text(
+                language,
+                'Autonomous market selection powered by the live Claw402.ai direction board.',
+                'Autonomous market selection powered by the live Claw402.ai direction board.'
+              )}
+            </p>
           </div>
-          {error && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs bg-nofx-danger/10 text-nofx-danger">
-              {error}
-              <button onClick={() => setError(null)} className="hover:underline">×</button>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={startUnifiedClaw402Agent}
+            disabled={saving || !selectedStrategy}
+            className="inline-flex items-center gap-2 rounded-lg bg-nofx-gold px-4 py-2 text-sm font-semibold text-nofx-bg hover:bg-nofx-gold-highlight"
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Bot className="h-4 w-4" />
+            )}
+            {text(language, 'Launch Autopilot', 'Launch Autopilot')}
+          </button>
         </div>
       </div>
 
-      {/* Main Content - Three Columns */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Column - Strategy List */}
-        <div className="w-48 flex-shrink-0 border-r border-nofx-gold/20 overflow-y-auto bg-nofx-bg/30 backdrop-blur-sm z-10">
-          <div className="p-2">
-            <div className="flex items-center justify-between mb-2 px-2">
-              <span className="text-xs font-medium text-nofx-text-muted">{t('strategies')}</span>
-              <div className="flex items-center gap-1">
-                {/* Import button with hidden file input */}
-                <label className="p-1 rounded hover:bg-white/10 transition-colors cursor-pointer text-nofx-text-muted hover:text-white" title={language === 'zh' ? '导入策略' : 'Import Strategy'}>
-                  <Upload className="w-4 h-4" />
-                  <input
-                    type="file"
-                    accept=".json"
-                    onChange={handleImportStrategy}
-                    className="hidden"
-                  />
-                </label>
-                <button
-                  onClick={handleCreateStrategy}
-                  className="p-1 rounded hover:bg-white/10 transition-colors text-nofx-gold"
-                  title={language === 'zh' ? '新建策略' : 'New Strategy'}
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            <div className="space-y-1">
-              {strategies.map((strategy) => (
-                <div
-                  key={strategy.id}
-                  onClick={() => {
-                    setSelectedStrategy(strategy)
-                    setEditingConfig(strategy.config)
-                    setHasChanges(false)
-                    setPromptPreview(null)
-                    setAiTestResult(null)
-                  }}
-                  className={`group px-2 py-2 rounded-lg cursor-pointer transition-all ${selectedStrategy?.id === strategy.id
-                    ? 'ring-1 ring-nofx-gold/50 bg-nofx-gold/10 shadow-[0_0_15px_rgba(240,185,11,0.1)]'
-                    : 'hover:bg-nofx-bg-lighter/60 hover:ring-1 hover:ring-nofx-gold/20 bg-transparent'
-                    }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm truncate text-nofx-text">{strategy.name}</span>
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleExportStrategy(strategy) }}
-                        className="p-1 rounded hover:bg-white/10 text-nofx-text-muted hover:text-white"
-                        title={language === 'zh' ? '导出' : 'Export'}
-                      >
-                        <Download className="w-3 h-3" />
-                      </button>
-                      {!strategy.is_default && (
-                        <>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDuplicateStrategy(strategy.id) }}
-                            className="p-1 rounded hover:bg-white/10 text-nofx-text-muted hover:text-white"
-                            title={language === 'zh' ? '复制' : 'Duplicate'}
-                          >
-                            <Copy className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteStrategy(strategy.id) }}
-                            className="p-1 rounded hover:bg-nofx-danger/20 text-nofx-danger"
-                            title={language === 'zh' ? '删除' : 'Delete'}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </>
+      <div className="grid min-h-[calc(100vh-137px)] grid-cols-1">
+        <aside className="hidden border-r border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper p-3">
+          <div className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-nofx-text-muted">
+            {text(language, 'My strategies', 'My strategies')}
+          </div>
+          <div className="space-y-2">
+            {strategies.map((strategy) => (
+              <button
+                key={strategy.id}
+                type="button"
+                onClick={() => {
+                  setSelectedStrategy(strategy)
+                  setEditingConfig(simplifyConfig(strategy.config))
+                  setHasChanges(false)
+                }}
+                className={`w-full rounded-lg border px-3 py-3 text-left transition ${
+                  selectedStrategy?.id === strategy.id
+                    ? 'border-nofx-gold bg-nofx-gold/10'
+                    : 'border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter hover:border-[rgba(25,36,52,0.24)]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="line-clamp-2 text-sm font-medium text-nofx-text">
+                    {strategy.name}
+                  </span>
+                  {strategy.is_active ? (
+                    <span className="rounded-sm bg-nofx-success/15 px-1.5 py-0.5 text-[10px] text-nofx-success">
+                      {text(language, 'Active', 'Active')}
+                    </span>
+                  ) : null}
+                </div>
+                {strategy.description ? (
+                  <div className="mt-1 line-clamp-2 text-xs text-nofx-text-muted">
+                    {strategy.description}
+                  </div>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <main className="overflow-y-auto p-5">
+          {selectedStrategy && aiConfig && coinSource && indicators && risk ? (
+            <div className="mx-auto max-w-7xl space-y-4">
+              <section className="hidden rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter p-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <input
+                      value={selectedStrategy.name}
+                      onChange={(event) => {
+                        setSelectedStrategy({
+                          ...selectedStrategy,
+                          name: event.target.value,
+                        })
+                        setHasChanges(true)
+                      }}
+                      className="w-full bg-transparent text-lg font-semibold text-nofx-text outline-hidden"
+                    />
+                    <input
+                      value={selectedStrategy.description || ''}
+                      onChange={(event) => {
+                        setSelectedStrategy({
+                          ...selectedStrategy,
+                          description: event.target.value,
+                        })
+                        setHasChanges(true)
+                      }}
+                      placeholder={text(
+                        language,
+                        'One-line strategy note',
+                        'One-line strategy note'
                       )}
+                      className="mt-1 w-full bg-transparent text-sm text-nofx-text-muted outline-hidden placeholder:text-nofx-text-muted/50"
+                    />
+                    {hasChanges ? (
+                      <div className="mt-2 text-xs text-nofx-gold">
+                        {text(language, 'Unsaved changes', 'Unsaved changes')}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="hidden flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => saveStrategy(true)}
+                      disabled={saving}
+                      className="inline-flex items-center gap-2 rounded-lg bg-nofx-success px-3 py-2 text-sm font-semibold text-nofx-bg disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {saving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Check className="h-4 w-4" />
+                      )}
+                      {text(language, 'Save and use', 'Save and use')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveStrategy()}
+                      disabled={saving || !hasChanges}
+                      className="inline-flex items-center gap-2 rounded-lg bg-nofx-gold px-3 py-2 text-sm font-semibold text-nofx-bg disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {saving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4" />
+                      )}
+                      {text(language, 'Save', 'Save')}
+                    </button>
+                    {!selectedStrategy.is_active ? (
+                      <button
+                        type="button"
+                        onClick={activateStrategy}
+                        className="inline-flex items-center gap-2 rounded-lg border border-nofx-success/30 bg-nofx-success/10 px-3 py-2 text-sm text-nofx-success hover:bg-nofx-success/15"
+                      >
+                        <Check className="h-4 w-4" />
+                        {text(language, 'Activate only', 'Activate only')}
+                      </button>
+                    ) : null}
+                    {!selectedStrategy.is_active ? (
+                      <button
+                        type="button"
+                        onClick={deleteStrategy}
+                        className="inline-flex items-center gap-2 rounded-lg border border-nofx-danger/25 bg-nofx-danger/10 px-3 py-2 text-sm text-nofx-danger hover:bg-nofx-danger/15"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {text(language, 'Delete', 'Delete')}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter p-4">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-nofx-text">
+                      <Sparkles className="h-4 w-4 text-nofx-gold" />
+                      Signal Board
+                    </div>
+                    <div className="mt-1 text-xs text-nofx-text-muted">
+                      Live direction board · direction history · liquidation map
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 mt-1 flex-wrap">
-                    {strategy.is_active && (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-nofx-success/15 text-nofx-success">
-                        {t('active')}
-                      </span>
-                    )}
-                    {strategy.is_default && (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-nofx-gold/15 text-nofx-gold">
-                        {t('default')}
-                      </span>
-                    )}
-                    {strategy.is_public && (
-                      <span className="px-1.5 py-0.5 text-[10px] rounded flex items-center gap-0.5 bg-blue-400/15 text-blue-400">
-                        <Globe className="w-2.5 h-2.5" />
-                        {language === 'zh' ? '公开' : 'Public'}
-                      </span>
-                    )}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (signals.length === 0) {
+                          void loadSignals()
+                        } else {
+                          setListMode('claw402')
+                        }
+                      }}
+                      disabled={signalsLoading}
+                      className={`hidden items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${
+                        listMode === 'claw402'
+                          ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                          : 'border-[rgba(25,36,52,0.14)] text-nofx-text-muted hover:text-nofx-text'
+                      }`}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      {signals.length === 0
+                        ? 'Load Claw402 board'
+                        : 'Claw402 board'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setListMode('pool')}
+                      disabled={symbolsLoading}
+                      className={`hidden items-center gap-2 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${
+                        listMode === 'pool'
+                          ? 'border-[rgba(25,36,52,0.24)] bg-nofx-bg-deeper text-nofx-text'
+                          : 'border-[rgba(25,36,52,0.14)] text-nofx-text-muted hover:text-nofx-text'
+                      }`}
+                    >
+                      <RefreshCw
+                        className={`h-3.5 w-3.5 ${symbolsLoading ? 'animate-spin' : ''}`}
+                      />
+                      Symbol pool
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void loadSignals()
+                      }}
+                      disabled={signalsLoading}
+                      className="inline-flex items-center gap-2 rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper px-3 py-2 text-xs text-nofx-text-muted hover:text-nofx-text disabled:opacity-50"
+                    >
+                      <RefreshCw
+                        className={`h-3.5 w-3.5 ${signalsLoading ? 'animate-spin' : ''}`}
+                      />
+                      Refresh
+                    </button>
+                    {selectedSymbols.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          patchCoinSource({
+                            static_coins: [],
+                            vergex_market_type: 'all',
+                          })
+                        }
+                        className="hidden rounded-lg border border-[rgba(25,36,52,0.14)] px-3 py-2 text-xs text-nofx-text-muted hover:text-nofx-text"
+                      >
+                        Clear selected
+                      </button>
+                    ) : null}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
 
-        {/* Middle Column - Config Editor */}
-        <div className="flex-1 min-w-0 overflow-y-auto border-r border-nofx-gold/20">
-          {selectedStrategy && editingConfig ? (
-            <div className="p-4">
-              {/* Strategy Name & Actions */}
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex-1 min-w-0">
-                  <input
-                    type="text"
-                    value={selectedStrategy.name}
-                    onChange={(e) => {
-                      setSelectedStrategy({ ...selectedStrategy, name: e.target.value })
-                      setHasChanges(true)
-                    }}
-                    disabled={selectedStrategy.is_default}
-                    className="text-lg font-bold bg-transparent border-none outline-none w-full text-nofx-text placeholder-nofx-text-muted"
-                  />
-                  <input
-                    type="text"
-                    value={selectedStrategy.description || ''}
-                    onChange={(e) => {
-                      setSelectedStrategy({ ...selectedStrategy, description: e.target.value })
-                      setHasChanges(true)
-                    }}
-                    disabled={selectedStrategy.is_default}
-                    placeholder={language === 'zh' ? '添加策略简介...' : 'Add strategy description...'}
-                    className="text-xs bg-transparent border-none outline-none w-full text-nofx-text-muted placeholder-nofx-text-muted/50 mt-1"
-                  />
-                  {hasChanges && (
-                    <span className="text-xs text-nofx-gold">● {language === 'zh' ? '未保存' : 'Unsaved'}</span>
-                  )}
+                <div className="hidden mb-4 flex-wrap gap-2">
+                  {scopeOptions.map((option) => {
+                    const signalCount =
+                      option.value === 'all'
+                        ? signals.length
+                        : signals.filter(
+                            (item) => item.category === option.value
+                          ).length
+                    const poolCount =
+                      option.value === 'all'
+                        ? symbols.filter((item) => item.category !== 'crypto')
+                            .length
+                        : symbols.filter(
+                            (item) => item.category === option.value
+                          ).length
+                    const count =
+                      listMode === 'claw402' ? signalCount : poolCount
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setScope(option.value)}
+                        className={`rounded-lg border px-3 py-2 text-xs transition ${
+                          scope === option.value
+                            ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                            : 'border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper text-nofx-text-muted hover:text-nofx-text'
+                        }`}
+                      >
+                        {option.en}
+                        {count > 0 ? (
+                          <span className="ml-2 opacity-70">{count}</span>
+                        ) : null}
+                      </button>
+                    )
+                  })}
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {!selectedStrategy.is_active && (
-                    <button
-                      onClick={() => handleActivateStrategy(selectedStrategy.id)}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors bg-nofx-success/10 border border-nofx-success/30 text-nofx-success hover:bg-nofx-success/20"
-                    >
-                      <Check className="w-3 h-3" />
-                      {t('activate')}
-                    </button>
-                  )}
-                  {!selectedStrategy.is_default && (
-                    <button
-                      onClick={handleSaveStrategy}
-                      disabled={isSaving || !hasChanges}
-                      className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50
-                        ${hasChanges ? 'bg-nofx-gold text-black hover:bg-yellow-500' : 'bg-nofx-bg-lighter text-nofx-text-muted cursor-not-allowed'}`}
-                    >
-                      <Save className="w-3 h-3" />
-                      {isSaving ? t('saving') : t('save')}
-                    </button>
-                  )}
-                </div>
-              </div>
 
-              {/* Config Sections */}
-              <div className="space-y-2">
-                {configSections.map(({ key, icon: Icon, color, title, content }) => (
-                  <div
-                    key={key}
-                    className="rounded-lg overflow-hidden bg-nofx-bg-lighter border border-nofx-gold/20"
-                  >
-                    <button
-                      onClick={() => toggleSection(key)}
-                      className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Icon className="w-4 h-4" style={{ color }} />
-                        <span className="text-sm font-medium text-nofx-text">{title}</span>
-                      </div>
-                      {expandedSections[key] ? (
-                        <ChevronDown className="w-4 h-4 text-nofx-text-muted" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4 text-nofx-text-muted" />
-                      )}
-                    </button>
-                    {expandedSections[key] && (
-                      <div className="px-3 pb-3">
-                        {content}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <Activity className="w-12 h-12 mx-auto mb-2 opacity-30 text-nofx-text-muted" />
-                <p className="text-sm text-nofx-text-muted">
-                  {language === 'zh' ? '选择或创建策略' : 'Select or create a strategy'}
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right Column - Prompt Preview & AI Test */}
-        <div className="w-[420px] flex-shrink-0 flex flex-col overflow-hidden">
-          {/* Tabs */}
-          <div className="flex-shrink-0 flex border-b border-nofx-gold/20">
-            <button
-              onClick={() => setActiveRightTab('prompt')}
-              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${activeRightTab === 'prompt' ? 'border-b-2 border-purple-500 text-purple-500' : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
-                }`}
-            >
-              <Eye className="w-4 h-4" />
-              {t('promptPreview')}
-            </button>
-            <button
-              onClick={() => setActiveRightTab('test')}
-              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-colors ${activeRightTab === 'test' ? 'border-b-2 border-green-500 text-green-500' : 'opacity-60 hover:opacity-100 text-nofx-text-muted'
-                }`}
-            >
-              <Play className="w-4 h-4" />
-              {t('aiTestRun')}
-            </button>
-          </div>
-
-          {/* Tab Content */}
-          <div className="flex-1 overflow-y-auto">
-            {activeRightTab === 'prompt' ? (
-              /* Prompt Preview Tab */
-              <div className="p-3 space-y-3">
-                {/* Controls */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <select
-                    value={selectedVariant}
-                    onChange={(e) => setSelectedVariant(e.target.value)}
-                    className="px-2 py-1.5 rounded text-xs bg-nofx-bg border border-nofx-gold/20 text-nofx-text outline-none focus:border-nofx-gold"
-                  >
-                    <option value="balanced">{t('balanced')}</option>
-                    <option value="aggressive">{t('aggressive')}</option>
-                    <option value="conservative">{t('conservative')}</option>
-                  </select>
+                <div className="hidden mb-4 gap-3 md:grid-cols-2">
                   <button
-                    onClick={fetchPromptPreview}
-                    disabled={isLoadingPrompt || !editingConfig}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 bg-purple-600 hover:bg-purple-700 text-white"
+                    type="button"
+                    onClick={() => {
+                      patchCoinSource({
+                        static_coins: [],
+                        vergex_market_type: 'all',
+                      })
+                      setListMode('claw402')
+                      if (signals.length === 0) {
+                        void loadSignals()
+                      }
+                    }}
+                    className={`rounded-lg border p-4 text-left transition ${
+                      selectedSymbols.length === 0
+                        ? 'border-nofx-success bg-nofx-success/10'
+                        : 'border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper hover:border-[rgba(25,36,52,0.24)]'
+                    }`}
                   >
-                    {isLoadingPrompt ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                    {promptPreview ? t('refreshPrompt') : t('loadPrompt')}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-nofx-text">
+                        Follow Claw402.ai board dynamically
+                      </div>
+                      {selectedSymbols.length === 0 ? (
+                        <Check className="h-4 w-4 text-nofx-success" />
+                      ) : null}
+                    </div>
+                    <div className="mt-2 text-xs text-nofx-text-muted">
+                      At runtime, trade the current range Top{' '}
+                      {coinSource.vergex_limit || 5}; the board refreshes each
+                      cycle.
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setListMode('claw402')
+                      if (signals.length === 0) {
+                        void loadSignals()
+                      }
+                    }}
+                    className={`rounded-lg border p-4 text-left transition ${
+                      selectedSymbols.length > 0
+                        ? 'border-nofx-gold bg-nofx-gold/10'
+                        : 'border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper hover:border-[rgba(25,36,52,0.24)]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-nofx-text">
+                        Pinned universe
+                      </div>
+                      {selectedSymbols.length > 0 ? (
+                        <Check className="h-4 w-4 text-nofx-gold" />
+                      ) : null}
+                    </div>
+                    <div className="mt-2 text-xs text-nofx-text-muted">
+                      {selectedSymbols.length > 0
+                        ? `${selectedSymbols.length} symbols fixed; trade only these.`
+                        : 'Autopilot uses the live Claw402 board by default.'}
+                    </div>
                   </button>
                 </div>
 
-                {promptPreview ? (
-                  <>
-                    {/* Config Summary */}
-                    <div className="p-2 rounded-lg bg-nofx-bg border border-nofx-gold/20">
-                      <div className="flex items-center gap-1.5 mb-2">
-                        <Code className="w-3 h-3 text-purple-500" />
-                        <span className="text-xs font-medium text-purple-500">Config</span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 text-xs">
-                        {Object.entries(promptPreview.config_summary || {}).map(([key, value]) => (
-                          <div key={key}>
-                            <div className="text-nofx-text-muted">{key.replace(/_/g, ' ')}</div>
-                            <div className="text-nofx-text">{String(value)}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* System Prompt */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="flex items-center gap-1.5">
-                          <FileText className="w-3 h-3 text-purple-500" />
-                          <span className="text-xs font-medium text-nofx-text">{t('systemPrompt')}</span>
-                        </div>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-nofx-bg-lighter text-nofx-text-muted">
-                          {promptPreview.system_prompt.length.toLocaleString()} chars
-                        </span>
-                      </div>
-                      <pre
-                        className="p-2 rounded-lg text-[11px] font-mono overflow-auto bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
-                        style={{ maxHeight: '400px' }}
-                      >
-                        {promptPreview.system_prompt}
-                      </pre>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex flex-col items-center justify-center py-12 text-nofx-text-muted">
-                    <Eye className="w-10 h-10 mb-2 opacity-30" />
-                    <p className="text-sm">{language === 'zh' ? '点击生成 Prompt 预览' : 'Click to generate prompt preview'}</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* AI Test Tab */
-              <div className="p-3 space-y-3">
-                {/* Controls */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Bot className="w-4 h-4 text-green-500" />
-                    <span className="text-xs font-medium text-nofx-text">{t('selectModel')}</span>
-                  </div>
-                  {aiModels.length > 0 ? (
+                <div className="hidden mb-4 flex-wrap items-center gap-3">
+                  <span className="text-sm text-nofx-text-muted">
+                    {selectedSymbols.length > 0
+                      ? `${selectedSymbols.length} selected`
+                      : `Without manual picks, runtime uses Claw402.ai Top ${coinSource.vergex_limit || 5} in this range`}
+                  </span>
+                  {selectedSymbols.length === 0 ? (
                     <select
-                      value={selectedModelId}
-                      onChange={(e) => setSelectedModelId(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
+                      value={coinSource.vergex_limit || 5}
+                      onChange={(event) =>
+                        patchCoinSource({
+                          vergex_limit: Math.max(Number(event.target.value), 5),
+                        })
+                      }
+                      className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
                     >
-                      {aiModels.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.name} ({model.provider})
+                      {topNOptions.map((value) => (
+                        <option key={value} value={value}>
+                          Top {value}
                         </option>
                       ))}
                     </select>
-                  ) : (
-                    <div className="px-3 py-2 rounded-lg text-sm bg-nofx-danger/10 text-nofx-danger">
-                      {t('noModel')}
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={selectedVariant}
-                      onChange={(e) => setSelectedVariant(e.target.value)}
-                      className="px-2 py-1.5 rounded text-xs bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
-                    >
-                      <option value="balanced">{t('balanced')}</option>
-                      <option value="aggressive">{t('aggressive')}</option>
-                      <option value="conservative">{t('conservative')}</option>
-                    </select>
-                    <button
-                      onClick={runAiTest}
-                      disabled={isRunningAiTest || !editingConfig || !selectedModelId}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all disabled:opacity-50 text-white shadow-lg shadow-green-500/20 bg-gradient-to-br from-green-500 to-green-600"
-                    >
-                      {isRunningAiTest ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          {t('running')}
-                        </>
-                      ) : (
-                        <>
-                          <Send className="w-4 h-4" />
-                          {t('runTest')}
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-nofx-text-muted">{t('testNote')}</p>
+                  ) : null}
                 </div>
 
-                {/* Test Results */}
-                {aiTestResult ? (
-                  <div className="space-y-3">
-                    {aiTestResult.error ? (
-                      <div className="p-3 rounded-lg bg-nofx-danger/10 border border-nofx-danger/30">
-                        <p className="text-sm text-nofx-danger">{aiTestResult.error}</p>
-                      </div>
-                    ) : (
+                {symbolsError || signalsError ? (
+                  <div className="mb-4 rounded-lg border border-nofx-gold/20 bg-nofx-gold/10 px-3 py-2 text-xs text-nofx-gold">
+                    {symbolsError || signalsError}
+                  </div>
+                ) : null}
+
+                {listMode === 'claw402' &&
+                signals.length === 0 &&
+                !signalsLoading ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void loadSignals()
+                    }}
+                    className="mb-4 inline-flex items-center gap-2 rounded-lg border border-nofx-gold/30 bg-nofx-gold/10 px-4 py-3 text-sm font-semibold text-nofx-gold hover:bg-nofx-gold/15"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Load Signal Board
+                  </button>
+                ) : null}
+
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {listMode === 'claw402' && signals.length > 0
+                    ? visibleSignalItems.map((item) => {
+                        const symbol = normalizeSymbol(item.symbol)
+                        const selected = selectedSet.has(symbol)
+                        const detailSelected = sameSignalItem(
+                          detailSignal,
+                          item
+                        )
+                        const bias = signalBiasInfo(item.bias)
+                        const BiasIcon = bias.icon
+                        return (
+                          <div
+                            key={`claw402-${item.rank || 0}-${symbol}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => void loadSignalDetail(item)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                void loadSignalDetail(item)
+                              }
+                            }}
+                            className={`cursor-pointer rounded-lg border p-3 text-left transition ${
+                              detailSelected || selected
+                                ? 'border-nofx-gold bg-nofx-gold/10'
+                                : 'border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper hover:border-[rgba(25,36,52,0.24)]'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono text-base font-semibold text-nofx-text">
+                                {symbol}
+                              </span>
+                              <span className="font-mono text-xs text-nofx-gold">
+                                #{item.rank || '-'}
+                              </span>
+                            </div>
+                            <div className="mt-4 flex items-center justify-between gap-3">
+                              <div
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-semibold ${bias.classes}`}
+                              >
+                                <BiasIcon className="h-3.5 w-3.5" />
+                                {bias.label}
+                              </div>
+                              <span className="font-mono text-xs text-nofx-text-muted">
+                                {formatSignalStrength(item)}
+                              </span>
+                            </div>
+                            <div className="mt-4 flex items-center justify-between gap-3 border-t border-[rgba(25,36,52,0.14)] pt-3 text-[11px] uppercase tracking-wide text-nofx-text-muted">
+                              <span>{categoryLabel(item.category, 'en')}</span>
+                              <span>{signalMarketType(item)}</span>
+                            </div>
+                          </div>
+                        )
+                      })
+                    : visibleSymbols.map((item) => {
+                        const symbol = normalizeSymbol(item.symbol)
+                        const signal = signalMap.get(symbol)
+                        const selected = selectedSet.has(symbol)
+                        return (
+                          <button
+                            key={`${item.exchange}-${symbol}`}
+                            type="button"
+                            onClick={() => toggleSymbol(symbol)}
+                            className={`rounded-lg border p-3 text-left transition ${
+                              selected
+                                ? 'border-nofx-gold bg-nofx-gold/10'
+                                : 'border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper hover:border-[rgba(25,36,52,0.24)]'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono text-sm font-semibold text-nofx-text">
+                                {symbol}
+                              </span>
+                              <span className="text-[10px] text-nofx-text-muted">
+                                {signal?.rank
+                                  ? `#${signal.rank}`
+                                  : formatChange(item.change_24h_pct)}
+                              </span>
+                            </div>
+                            <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-nofx-text-muted">
+                              <span>{categoryLabel(item.category, 'en')}</span>
+                              <span>
+                                {signal?.bias ||
+                                  (item.mark_price
+                                    ? `$${item.mark_price.toFixed(2)}`
+                                    : 'ready')}
+                              </span>
+                            </div>
+                          </button>
+                        )
+                      })}
+                </div>
+
+                {listMode === 'claw402' ? (
+                  <div
+                    id="claw402-detail-panel"
+                    className="mt-4 scroll-mt-28 space-y-4"
+                  >
+                    {detailSignal ? (
                       <>
-                        {aiTestResult.duration_ms && (
-                          <div className="flex items-center gap-2">
-                            <Clock className="w-3 h-3 text-nofx-text-muted" />
-                            <span className="text-xs text-nofx-text-muted">
-                              {t('duration')}: {(aiTestResult.duration_ms / 1000).toFixed(2)}s
-                            </span>
-                          </div>
-                        )}
-
-                        {/* User Prompt Input */}
-                        {aiTestResult.user_prompt && (
-                          <div>
-                            <div className="flex items-center gap-1.5 mb-1.5">
-                              <Terminal className="w-3 h-3 text-blue-400" />
-                              <span className="text-xs font-medium text-nofx-text">{t('userPrompt')} (Input)</span>
+                        <section className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter px-4 py-3">
+                          <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-mono text-xl font-semibold text-nofx-text">
+                                  {normalizeSymbol(detailSignal.symbol)}
+                                </span>
+                                <span className="rounded-md bg-nofx-gold/10 px-2 py-1 text-xs font-semibold text-nofx-gold">
+                                  #{detailSignal.rank || '-'}
+                                </span>
+                                <span className="rounded-md bg-nofx-bg-deeper px-2 py-1 text-xs text-nofx-text-muted">
+                                  {categoryLabel(detailSignal.category, 'en')}
+                                </span>
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-2 font-mono text-xs text-nofx-text-muted">
+                                <span>{signalMarketType(detailSignal)}</span>
+                                <span>·</span>
+                                <span>
+                                  {strategySymbolForSignal(detailSignal)}
+                                </span>
+                                <span>·</span>
+                                <span>mainnet</span>
+                                <span>·</span>
+                                <span>±{detailLiqBand}% band</span>
+                              </div>
                             </div>
-                            <pre
-                              className="p-2 rounded-lg text-[10px] font-mono overflow-auto bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
-                              style={{ maxHeight: '200px' }}
-                            >
-                              {aiTestResult.user_prompt}
-                            </pre>
-                          </div>
-                        )}
-
-                        {/* AI Reasoning */}
-                        {aiTestResult.reasoning && (
-                          <div>
-                            <div className="flex items-center gap-1.5 mb-1.5">
-                              <Sparkles className="w-3 h-3 text-nofx-gold" />
-                              <span className="text-xs font-medium text-nofx-text">{t('reasoning')}</span>
+                            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void loadSignalDetail(
+                                    detailSignal,
+                                    detailLiqBand
+                                  )
+                                }
+                                disabled={detailLoading}
+                                className="inline-flex items-center gap-2 rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper px-3 py-2 text-xs text-nofx-text-muted hover:text-nofx-text disabled:opacity-50"
+                              >
+                                <RefreshCw
+                                  className={`h-3.5 w-3.5 ${
+                                    detailLoading ? 'animate-spin' : ''
+                                  }`}
+                                />
+                                Refresh
+                              </button>
                             </div>
-                            <pre
-                              className="p-2 rounded-lg text-[10px] font-mono overflow-auto whitespace-pre-wrap bg-nofx-bg border border-nofx-gold/30 text-nofx-text"
-                              style={{ maxHeight: '200px' }}
-                            >
-                              {aiTestResult.reasoning}
-                            </pre>
                           </div>
-                        )}
-
-                        {/* AI Decisions */}
-                        {aiTestResult.decisions && aiTestResult.decisions.length > 0 && (
-                          <div>
-                            <div className="flex items-center gap-1.5 mb-1.5">
-                              <Activity className="w-3 h-3 text-green-500" />
-                              <span className="text-xs font-medium text-nofx-text">{t('decisions')}</span>
+                          {detailLoading ? (
+                            <div className="mt-3 inline-flex items-center gap-2 text-xs text-nofx-text-muted">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Loading direction history and heatmap...
                             </div>
-                            <pre
-                              className="p-2 rounded-lg text-[10px] font-mono overflow-auto bg-nofx-bg border border-green-500/30 text-nofx-text"
-                              style={{ maxHeight: '200px' }}
-                            >
-                              {JSON.stringify(aiTestResult.decisions, null, 2)}
-                            </pre>
-                          </div>
-                        )}
-
-                        {/* Raw AI Response */}
-                        {aiTestResult.ai_response && (
-                          <div>
-                            <div className="flex items-center gap-1.5 mb-1.5">
-                              <FileText className="w-3 h-3 text-nofx-text-muted" />
-                              <span className="text-xs font-medium text-nofx-text">{t('aiOutput')} (Raw)</span>
+                          ) : null}
+                          {detailError ? (
+                            <div className="mt-3 rounded-md border border-nofx-gold/20 bg-nofx-gold/10 px-3 py-2 text-xs text-nofx-gold">
+                              {detailError}
                             </div>
-                            <pre
-                              className="p-2 rounded-lg text-[10px] font-mono overflow-auto whitespace-pre-wrap bg-nofx-bg border border-nofx-gold/20 text-nofx-text"
-                              style={{ maxHeight: '300px' }}
-                            >
-                              {aiTestResult.ai_response}
-                            </pre>
-                          </div>
-                        )}
+                          ) : null}
+                        </section>
+
+                        <CostLiquidationHeatmap heatmap={heatmap} />
+                        <DirectionChangePanel
+                          current={directionCurrent}
+                          history={directionHistory}
+                        />
                       </>
+                    ) : (
+                      <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper px-4 py-4 text-sm text-nofx-text-muted">
+                        NOFX Autopilot follows the Claw402 direction board and
+                        uses liquidation structure and raw candles as context.
+                      </div>
                     )}
                   </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center py-12 text-nofx-text-muted">
-                    <Play className="w-10 h-10 mb-2 opacity-30" />
-                    <p className="text-sm">{language === 'zh' ? '点击运行 AI 测试' : 'Click to run AI test'}</p>
+                ) : null}
+
+                {listMode === 'claw402' &&
+                signals.length > 0 &&
+                visibleSignalItems.length === 0 ? (
+                  <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper px-3 py-3 text-sm text-nofx-text-muted">
+                    No Claw402 markets available.
                   </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+                ) : null}
+
+                {listMode === 'pool' &&
+                visibleSymbols.length === 0 &&
+                !symbolsLoading ? (
+                  <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper px-3 py-3 text-sm text-nofx-text-muted">
+                    No markets available.
+                  </div>
+                ) : null}
+              </section>
+
+              <details className="hidden rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-deeper p-4">
+                <summary className="cursor-pointer text-sm font-semibold text-nofx-text">
+                  {text(language, 'Advanced settings', 'Advanced settings')}
+                </summary>
+                <div className="mt-4 rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter p-4">
+                  <div className="mb-3 text-sm font-semibold text-nofx-text">
+                    {text(language, 'Trading style', 'Trading style')}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {profileOptions.map((profile) => (
+                      <button
+                        key={profile.value}
+                        type="button"
+                        onClick={() => applyProfile(profile)}
+                        className={`rounded-lg border px-3 py-2 text-sm transition ${
+                          activeProfile === profile.value
+                            ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                            : 'border-[rgba(25,36,52,0.14)] text-nofx-text-muted hover:text-nofx-text'
+                        }`}
+                      >
+                        {text(language, profile.zh, profile.en)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter p-4">
+                    <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-nofx-text">
+                      <Sparkles className="h-4 w-4 text-nofx-gold" />
+                      {text(language, 'Raw candles', 'Raw candles')}
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <div className="mb-2 text-xs text-nofx-text-muted">
+                          {text(language, 'Timeframe', 'Timeframe')}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {timeframeOptions.map((timeframe) => (
+                            <button
+                              key={timeframe}
+                              type="button"
+                              onClick={() => setTimeframe(timeframe)}
+                              className={`rounded-lg border px-3 py-2 text-sm ${
+                                indicators.klines.primary_timeframe ===
+                                timeframe
+                                  ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                                  : 'border-[rgba(25,36,52,0.14)] text-nofx-text-muted hover:text-nofx-text'
+                              }`}
+                            >
+                              {timeframe}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-2 text-xs text-nofx-text-muted">
+                          {text(language, 'Bars', 'Bars')}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {barCountOptions.map((count) => (
+                            <button
+                              key={count}
+                              type="button"
+                              onClick={() => setBarCount(count)}
+                              className={`rounded-lg border px-3 py-2 text-sm ${
+                                indicators.klines.primary_count === count
+                                  ? 'border-nofx-gold bg-nofx-gold/10 text-nofx-gold'
+                                  : 'border-[rgba(25,36,52,0.14)] text-nofx-text-muted hover:text-nofx-text'
+                              }`}
+                            >
+                              {count}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter p-4">
+                    <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-nofx-text">
+                      <Shield className="h-4 w-4 text-nofx-success" />
+                      {text(
+                        language,
+                        'Trading parameters',
+                        'Trading parameters'
+                      )}
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <label className="space-y-2">
+                        <span className="text-xs text-nofx-text-muted">
+                          {text(language, 'Max positions', 'Max positions')}
+                        </span>
+                        <select
+                          value={risk.max_positions}
+                          onChange={(event) =>
+                            patchRisk({
+                              max_positions: Number(event.target.value),
+                            })
+                          }
+                          className="w-full rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                        >
+                          {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
+                            <option key={value} value={value}>
+                              {value}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-xs text-nofx-text-muted">
+                          {text(language, 'Leverage', 'Leverage')}
+                        </span>
+                        <select
+                          value={risk.altcoin_max_leverage}
+                          onChange={(event) =>
+                            setLeverage(Number(event.target.value))
+                          }
+                          className="w-full rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                        >
+                          {[1, 2, 3, 5, 8, 10].map((value) => (
+                            <option key={value} value={value}>
+                              {value}x
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-xs text-nofx-text-muted">
+                          {text(
+                            language,
+                            'Entry confidence',
+                            'Entry confidence'
+                          )}
+                        </span>
+                        <select
+                          value={risk.min_confidence}
+                          onChange={(event) =>
+                            patchRisk({
+                              min_confidence: Number(event.target.value),
+                            })
+                          }
+                          className="w-full rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text"
+                        >
+                          {confidenceOptions.map((value) => (
+                            <option key={value} value={value}>
+                              {value}%
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg-lighter p-4">
+                  <div className="mb-2 text-sm font-semibold text-nofx-text">
+                    {text(language, 'Strategy note', 'Strategy note')}
+                  </div>
+                  <textarea
+                    value={aiConfig.custom_prompt || ''}
+                    onChange={(event) =>
+                      patchAI({ custom_prompt: event.target.value })
+                    }
+                    placeholder={text(
+                      language,
+                      'Example: only trade clean trends; skip entries when board signals conflict with candles.',
+                      'Example: only trade clean trends; skip entries when board signals conflict with candles.'
+                    )}
+                    className="h-28 w-full resize-none rounded-lg border border-[rgba(25,36,52,0.14)] bg-nofx-bg px-3 py-2 text-sm text-nofx-text outline-hidden placeholder:text-nofx-text-muted/50"
+                  />
+                </div>
+              </details>
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <button
+                type="button"
+                onClick={createStrategy}
+                className="inline-flex items-center gap-2 rounded-lg bg-nofx-gold px-4 py-2 text-sm font-semibold text-nofx-bg hover:bg-nofx-gold-highlight"
+              >
+                <Plus className="h-4 w-4" />
+                {text(language, 'Initialize Autopilot', 'Initialize Autopilot')}
+              </button>
+            </div>
+          )}
+        </main>
       </div>
     </DeepVoidBackground>
   )

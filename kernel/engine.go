@@ -1,36 +1,23 @@
 package kernel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
-	"nofx/mcp"
+	"nofx/provider/hyperliquid"
 	"nofx/provider/nofxos"
+	"nofx/provider/vergex"
 	"nofx/security"
 	"nofx/store"
-	"regexp"
+	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
-)
-
-// ============================================================================
-// Pre-compiled regular expressions (performance optimization)
-// ============================================================================
-
-var (
-	// Safe regex: precisely match ```json code blocks
-	reJSONFence      = regexp.MustCompile(`(?is)` + "```json\\s*(\\[\\s*\\{.*?\\}\\s*\\])\\s*```")
-	reJSONArray      = regexp.MustCompile(`(?is)\[\s*\{.*?\}\s*\]`)
-	reArrayHead      = regexp.MustCompile(`^\[\s*\{`)
-	reArrayOpenSpace = regexp.MustCompile(`^\[\s+\{`)
-	reInvisibleRunes = regexp.MustCompile("[\u200B\u200C\u200D\uFEFF]")
-
-	// XML tag extraction (supports any characters in reasoning chain)
-	reReasoningTag = regexp.MustCompile(`(?s)<reasoning>(.*?)</reasoning>`)
-	reDecisionTag  = regexp.MustCompile(`(?s)<decision>(.*?)</decision>`)
 )
 
 // ============================================================================
@@ -106,37 +93,45 @@ type RecentOrder struct {
 
 // Context trading context (complete information passed to AI)
 type Context struct {
-	CurrentTime     string                             `json:"current_time"`
-	RuntimeMinutes  int                                `json:"runtime_minutes"`
-	CallCount       int                                `json:"call_count"`
-	Account         AccountInfo                        `json:"account"`
-	Positions       []PositionInfo                     `json:"positions"`
-	CandidateCoins  []CandidateCoin                    `json:"candidate_coins"`
-	PromptVariant   string                             `json:"prompt_variant,omitempty"`
-	TradingStats    *TradingStats                      `json:"trading_stats,omitempty"`
-	RecentOrders    []RecentOrder                      `json:"recent_orders,omitempty"`
-	MarketDataMap   map[string]*market.Data            `json:"-"`
-	MultiTFMarket   map[string]map[string]*market.Data `json:"-"`
-	OITopDataMap    map[string]*OITopData              `json:"-"`
-	QuantDataMap    map[string]*QuantData              `json:"-"`
-	OIRankingData      *nofxos.OIRankingData      `json:"-"` // Market-wide OI ranking data
-	NetFlowRankingData *nofxos.NetFlowRankingData `json:"-"` // Market-wide fund flow ranking data
-	PriceRankingData   *nofxos.PriceRankingData   `json:"-"` // Market-wide price gainers/losers
-	BTCETHLeverage     int                          `json:"-"`
-	AltcoinLeverage int                                `json:"-"`
-	Timeframes      []string                           `json:"-"`
+	CurrentTime        string                             `json:"current_time"`
+	RuntimeMinutes     int                                `json:"runtime_minutes"`
+	CallCount          int                                `json:"call_count"`
+	Account            AccountInfo                        `json:"account"`
+	Positions          []PositionInfo                     `json:"positions"`
+	CandidateCoins     []CandidateCoin                    `json:"candidate_coins"`
+	PromptVariant      string                             `json:"prompt_variant,omitempty"`
+	TradingStats       *TradingStats                      `json:"trading_stats,omitempty"`
+	RecentOrders       []RecentOrder                      `json:"recent_orders,omitempty"`
+	MarketDataMap      map[string]*market.Data            `json:"-"`
+	MultiTFMarket      map[string]map[string]*market.Data `json:"-"`
+	OITopDataMap       map[string]*OITopData              `json:"-"`
+	QuantDataMap       map[string]*QuantData              `json:"-"`
+	VergexDataMap      map[string]*vergex.MarketAnalysis  `json:"-"`
+	OIRankingData      *nofxos.OIRankingData              `json:"-"` // Market-wide OI ranking data
+	NetFlowRankingData *nofxos.NetFlowRankingData         `json:"-"` // Market-wide fund flow ranking data
+	PriceRankingData   *nofxos.PriceRankingData           `json:"-"` // Market-wide price gainers/losers
+	BTCETHLeverage     int                                `json:"-"`
+	AltcoinLeverage    int                                `json:"-"`
+	Timeframes         []string                           `json:"-"`
 }
 
 // Decision AI trading decision
 type Decision struct {
 	Symbol string `json:"symbol"`
-	Action string `json:"action"` // "open_long", "open_short", "close_long", "close_short", "hold", "wait"
+	Action string `json:"action"` // Standard: "open_long", "open_short", "close_long", "close_short", "hold", "wait"
+	// Grid actions: "place_buy_limit", "place_sell_limit", "cancel_order", "cancel_all_orders", "pause_grid", "resume_grid", "adjust_grid"
 
 	// Opening position parameters
 	Leverage        int     `json:"leverage,omitempty"`
 	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
 	StopLoss        float64 `json:"stop_loss,omitempty"`
 	TakeProfit      float64 `json:"take_profit,omitempty"`
+
+	// Grid trading parameters
+	Price      float64 `json:"price,omitempty"`       // Limit order price (for grid)
+	Quantity   float64 `json:"quantity,omitempty"`    // Order quantity (for grid)
+	LevelIndex int     `json:"level_index,omitempty"` // Grid level index
+	OrderID    string  `json:"order_id,omitempty"`    // Order ID (for cancel)
 
 	// Common parameters
 	Confidence int     `json:"confidence,omitempty"` // Confidence level (0-100)
@@ -191,23 +186,64 @@ type OIDeltaData struct {
 
 // StrategyEngine strategy execution engine
 type StrategyEngine struct {
-	config       *store.StrategyConfig
-	nofxosClient *nofxos.Client
+	config             *store.StrategyConfig
+	nofxosClient       *nofxos.Client
+	vergexClient       *vergex.Client
+	vergexRankingCache map[string]*vergex.DirectionChangeItem
 }
 
-// NewStrategyEngine creates strategy execution engine
-func NewStrategyEngine(config *store.StrategyConfig) *StrategyEngine {
-	// Create NofxOS client with API key from config
-	apiKey := config.Indicators.NofxOSAPIKey
-	if apiKey == "" {
-		apiKey = nofxos.DefaultAuthKey
+// NewStrategyEngine creates strategy execution engine.
+// Paid market data always goes through Claw402. If no key is passed, resolve
+// CLAW402_WALLET_KEY; missing/invalid wallets disable paid data, not payment.
+func NewStrategyEngine(config *store.StrategyConfig, claw402WalletKey ...string) *StrategyEngine {
+	walletKey := ""
+	if len(claw402WalletKey) > 0 {
+		walletKey = strings.TrimSpace(claw402WalletKey[0])
 	}
-	client := nofxos.NewClient(nofxos.DefaultBaseURL, apiKey)
+	if walletKey == "" {
+		walletKey = strings.TrimSpace(os.Getenv("CLAW402_WALLET_KEY"))
+	}
+	client := nofxos.ResolveClient(walletKey)
+	if walletKey != "" {
+		claw402URL := strings.TrimSpace(os.Getenv("CLAW402_URL"))
+		if claw402URL == "" {
+			claw402URL = "https://claw402.ai"
+		}
+		vergexClient, err := vergex.NewClient(claw402URL, walletKey, &logger.MCPLogger{})
+		if err == nil {
+			logger.Infof("🔗 Vergex signals routed through claw402 (%s)", claw402URL)
+		} else {
+			logger.Warnf("⚠️ Failed to init Vergex claw402 client: %v", err)
+		}
+		return &StrategyEngine{
+			config:             config,
+			nofxosClient:       client,
+			vergexClient:       vergexClient,
+			vergexRankingCache: make(map[string]*vergex.DirectionChangeItem),
+		}
+	}
 
 	return &StrategyEngine{
-		config:       config,
-		nofxosClient: client,
+		config:             config,
+		nofxosClient:       client,
+		vergexRankingCache: make(map[string]*vergex.DirectionChangeItem),
 	}
+}
+
+func (e *StrategyEngine) usesHyperliquidNativeUniverse() bool {
+	if e == nil || e.config == nil {
+		return false
+	}
+	source := e.config.CoinSource
+	if source.SourceType == "hyper_all" || source.SourceType == "hyper_main" || source.SourceType == "hyper_rank" || source.SourceType == "vergex_signal" || source.UseHyperAll || source.UseHyperMain {
+		return true
+	}
+	for _, symbol := range source.StaticCoins {
+		if market.IsXyzDexAsset(symbol) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetRiskControlConfig gets risk control configuration
@@ -234,173 +270,6 @@ func (e *StrategyEngine) GetConfig() *store.StrategyConfig {
 }
 
 // ============================================================================
-// Entry Functions - Main API
-// ============================================================================
-
-// GetFullDecision gets AI's complete trading decision (batch analysis of all coins and positions)
-// Uses default strategy configuration - for production use GetFullDecisionWithStrategy with explicit config
-func GetFullDecision(ctx *Context, mcpClient mcp.AIClient) (*FullDecision, error) {
-	defaultConfig := store.GetDefaultStrategyConfig("en")
-	engine := NewStrategyEngine(&defaultConfig)
-	return GetFullDecisionWithStrategy(ctx, mcpClient, engine, "")
-}
-
-// GetFullDecisionWithStrategy uses StrategyEngine to get AI decision (unified prompt generation)
-func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *StrategyEngine, variant string) (*FullDecision, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("context is nil")
-	}
-	if engine == nil {
-		defaultConfig := store.GetDefaultStrategyConfig("en")
-		engine = NewStrategyEngine(&defaultConfig)
-	}
-
-	// 1. Fetch market data using strategy config
-	if len(ctx.MarketDataMap) == 0 {
-		if err := fetchMarketDataWithStrategy(ctx, engine); err != nil {
-			return nil, fmt.Errorf("failed to fetch market data: %w", err)
-		}
-	}
-
-	// Ensure OITopDataMap is initialized
-	if ctx.OITopDataMap == nil {
-		ctx.OITopDataMap = make(map[string]*OITopData)
-		oiPositions, err := engine.nofxosClient.GetOITopPositions()
-		if err == nil {
-			for _, pos := range oiPositions {
-				ctx.OITopDataMap[pos.Symbol] = &OITopData{
-					Rank:              pos.Rank,
-					OIDeltaPercent:    pos.OIDeltaPercent,
-					OIDeltaValue:      pos.OIDeltaValue,
-					PriceDeltaPercent: pos.PriceDeltaPercent,
-				}
-			}
-		}
-	}
-
-	// 2. Build System Prompt using strategy engine
-	riskConfig := engine.GetRiskControlConfig()
-	systemPrompt := engine.BuildSystemPrompt(ctx.Account.TotalEquity, variant)
-
-	// 3. Build User Prompt using strategy engine
-	userPrompt := engine.BuildUserPrompt(ctx)
-
-	// 4. Call AI API
-	aiCallStart := time.Now()
-	aiResponse, err := mcpClient.CallWithMessages(systemPrompt, userPrompt)
-	aiCallDuration := time.Since(aiCallStart)
-	if err != nil {
-		return nil, fmt.Errorf("AI API call failed: %w", err)
-	}
-
-	// 5. Parse AI response
-	decision, err := parseFullDecisionResponse(
-		aiResponse,
-		ctx.Account.TotalEquity,
-		riskConfig.BTCETHMaxLeverage,
-		riskConfig.AltcoinMaxLeverage,
-		riskConfig.BTCETHMaxPositionValueRatio,
-		riskConfig.AltcoinMaxPositionValueRatio,
-	)
-
-	if decision != nil {
-		decision.Timestamp = time.Now()
-		decision.SystemPrompt = systemPrompt
-		decision.UserPrompt = userPrompt
-		decision.AIRequestDurationMs = aiCallDuration.Milliseconds()
-		decision.RawResponse = aiResponse
-	}
-
-	if err != nil {
-		return decision, fmt.Errorf("failed to parse AI response: %w", err)
-	}
-
-	return decision, nil
-}
-
-// ============================================================================
-// Market Data Fetching
-// ============================================================================
-
-// fetchMarketDataWithStrategy fetches market data using strategy config (multiple timeframes)
-func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
-	config := engine.GetConfig()
-	ctx.MarketDataMap = make(map[string]*market.Data)
-
-	timeframes := config.Indicators.Klines.SelectedTimeframes
-	primaryTimeframe := config.Indicators.Klines.PrimaryTimeframe
-	klineCount := config.Indicators.Klines.PrimaryCount
-
-	// Compatible with old configuration
-	if len(timeframes) == 0 {
-		if primaryTimeframe != "" {
-			timeframes = append(timeframes, primaryTimeframe)
-		} else {
-			timeframes = append(timeframes, "3m")
-		}
-		if config.Indicators.Klines.LongerTimeframe != "" {
-			timeframes = append(timeframes, config.Indicators.Klines.LongerTimeframe)
-		}
-	}
-	if primaryTimeframe == "" {
-		primaryTimeframe = timeframes[0]
-	}
-	if klineCount <= 0 {
-		klineCount = 30
-	}
-
-	logger.Infof("📊 Strategy timeframes: %v, Primary: %s, Kline count: %d", timeframes, primaryTimeframe, klineCount)
-
-	// 1. First fetch data for position coins (must fetch)
-	for _, pos := range ctx.Positions {
-		data, err := market.GetWithTimeframes(pos.Symbol, timeframes, primaryTimeframe, klineCount)
-		if err != nil {
-			logger.Infof("⚠️  Failed to fetch market data for position %s: %v", pos.Symbol, err)
-			continue
-		}
-		ctx.MarketDataMap[pos.Symbol] = data
-	}
-
-	// 2. Fetch data for all candidate coins
-	positionSymbols := make(map[string]bool)
-	for _, pos := range ctx.Positions {
-		positionSymbols[pos.Symbol] = true
-	}
-
-	const minOIThresholdMillions = 15.0 // 15M USD minimum open interest value
-
-	for _, coin := range ctx.CandidateCoins {
-		if _, exists := ctx.MarketDataMap[coin.Symbol]; exists {
-			continue
-		}
-
-		data, err := market.GetWithTimeframes(coin.Symbol, timeframes, primaryTimeframe, klineCount)
-		if err != nil {
-			logger.Infof("⚠️  Failed to fetch market data for %s: %v", coin.Symbol, err)
-			continue
-		}
-
-		// Liquidity filter (skip for xyz dex assets - they don't have OI data from Binance)
-		isExistingPosition := positionSymbols[coin.Symbol]
-		isXyzAsset := market.IsXyzDexAsset(coin.Symbol)
-		if !isExistingPosition && !isXyzAsset && data.OpenInterest != nil && data.CurrentPrice > 0 {
-			oiValue := data.OpenInterest.Latest * data.CurrentPrice
-			oiValueInMillions := oiValue / 1_000_000
-			if oiValueInMillions < minOIThresholdMillions {
-				logger.Infof("⚠️  %s OI value too low (%.2fM USD < %.1fM), skipping coin",
-					coin.Symbol, oiValueInMillions, minOIThresholdMillions)
-				continue
-			}
-		}
-
-		ctx.MarketDataMap[coin.Symbol] = data
-	}
-
-	logger.Infof("📊 Successfully fetched multi-timeframe market data for %d coins", len(ctx.MarketDataMap))
-	return nil
-}
-
-// ============================================================================
 // Candidate Coins
 // ============================================================================
 
@@ -424,7 +293,7 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		return e.filterExcludedCoins(candidates), nil
 
 	case "ai500":
-		// 检查 use_ai500 标志，如果为 false 则回退到静态币种
+		// Check use_ai500 flag; if false, fall back to static coins
 		if !coinSource.UseAI500 {
 			logger.Infof("⚠️  source_type is 'ai500' but use_ai500 is false, falling back to static coins")
 			for _, symbol := range coinSource.StaticCoins {
@@ -440,10 +309,11 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Empty list is a normal condition, return directly
 		return e.filterExcludedCoins(coins), nil
 
 	case "oi_top":
-		// 检查 use_oi_top 标志，如果为 false 则回退到静态币种
+		// Check use_oi_top flag; if false, fall back to static coins
 		if !coinSource.UseOITop {
 			logger.Infof("⚠️  source_type is 'oi_top' but use_oi_top is false, falling back to static coins")
 			for _, symbol := range coinSource.StaticCoins {
@@ -456,6 +326,86 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			return e.filterExcludedCoins(candidates), nil
 		}
 		coins, err := e.getOITopCoins(coinSource.OITopLimit)
+		if err != nil {
+			return nil, err
+		}
+		// Empty list is a normal condition, return directly
+		return e.filterExcludedCoins(coins), nil
+
+	case "oi_low":
+		// OI decrease ranking, suitable for short positions
+		if !coinSource.UseOILow {
+			logger.Infof("⚠️  source_type is 'oi_low' but use_oi_low is false, falling back to static coins")
+			for _, symbol := range coinSource.StaticCoins {
+				symbol = market.Normalize(symbol)
+				candidates = append(candidates, CandidateCoin{
+					Symbol:  symbol,
+					Sources: []string{"static"},
+				})
+			}
+			return e.filterExcludedCoins(candidates), nil
+		}
+		coins, err := e.getOILowCoins(coinSource.OILowLimit)
+		if err != nil {
+			return nil, err
+		}
+		// Empty list is a normal condition, return directly
+		return e.filterExcludedCoins(coins), nil
+
+	case "hyper_all":
+		// All Hyperliquid perp coins
+		if !coinSource.UseHyperAll {
+			logger.Infof("⚠️  source_type is 'hyper_all' but use_hyper_all is false, falling back to static coins")
+			for _, symbol := range coinSource.StaticCoins {
+				symbol = market.Normalize(symbol)
+				candidates = append(candidates, CandidateCoin{
+					Symbol:  symbol,
+					Sources: []string{"static"},
+				})
+			}
+			return e.filterExcludedCoins(candidates), nil
+		}
+		coins, err := e.getHyperAllCoins()
+		if err != nil {
+			return nil, err
+		}
+		return e.filterExcludedCoins(coins), nil
+
+	case "hyper_main":
+		// Top N Hyperliquid coins by 24h volume
+		if !coinSource.UseHyperMain {
+			logger.Infof("⚠️  source_type is 'hyper_main' but use_hyper_main is false, falling back to static coins")
+			for _, symbol := range coinSource.StaticCoins {
+				symbol = market.Normalize(symbol)
+				candidates = append(candidates, CandidateCoin{
+					Symbol:  symbol,
+					Sources: []string{"static"},
+				})
+			}
+			return e.filterExcludedCoins(candidates), nil
+		}
+		coins, err := e.getHyperMainCoins(coinSource.HyperMainLimit)
+		if err != nil {
+			return nil, err
+		}
+		return e.filterExcludedCoins(coins), nil
+
+	case "hyper_rank":
+		coins, err := e.getHyperRankCoins(coinSource.HyperRankCategory, coinSource.HyperRankDirection, coinSource.HyperRankLimit)
+		if err != nil {
+			return nil, err
+		}
+		return e.filterExcludedCoins(coins), nil
+
+	case "vergex_signal":
+		coins, err := e.getVergexSignalCoins(
+			coinSource.VergexLimit,
+			coinSource.VergexMarketType,
+			coinSource.VergexChain,
+			coinSource.VergexLiqBand,
+			coinSource.HyperRankCategory,
+			coinSource.StaticCoins,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -480,6 +430,39 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 			} else {
 				for _, coin := range oiCoins {
 					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "oi_top")
+				}
+			}
+		}
+
+		if coinSource.UseOILow {
+			oiLowCoins, err := e.getOILowCoins(coinSource.OILowLimit)
+			if err != nil {
+				logger.Infof("⚠️  Failed to get OI Low: %v", err)
+			} else {
+				for _, coin := range oiLowCoins {
+					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "oi_low")
+				}
+			}
+		}
+
+		if coinSource.UseHyperAll {
+			hyperCoins, err := e.getHyperAllCoins()
+			if err != nil {
+				logger.Infof("⚠️  Failed to get Hyperliquid All coins: %v", err)
+			} else {
+				for _, coin := range hyperCoins {
+					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "hyper_all")
+				}
+			}
+		}
+
+		if coinSource.UseHyperMain {
+			hyperMainCoins, err := e.getHyperMainCoins(coinSource.HyperMainLimit)
+			if err != nil {
+				logger.Infof("⚠️  Failed to get Hyperliquid Main coins: %v", err)
+			} else {
+				for _, coin := range hyperMainCoins {
+					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "hyper_main")
 				}
 			}
 		}
@@ -554,7 +537,7 @@ func (e *StrategyEngine) getAI500Coins(limit int) ([]CandidateCoin, error) {
 
 func (e *StrategyEngine) getOITopCoins(limit int) ([]CandidateCoin, error) {
 	if limit <= 0 {
-		limit = 20
+		limit = 10
 	}
 
 	positions, err := e.nofxosClient.GetOITopPositions()
@@ -574,6 +557,385 @@ func (e *StrategyEngine) getOITopCoins(limit int) ([]CandidateCoin, error) {
 		})
 	}
 	return candidates, nil
+}
+
+func (e *StrategyEngine) getOILowCoins(limit int) ([]CandidateCoin, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	positions, err := e.nofxosClient.GetOILowPositions()
+	if err != nil {
+		return nil, err
+	}
+
+	var candidates []CandidateCoin
+	for i, pos := range positions {
+		if i >= limit {
+			break
+		}
+		symbol := market.Normalize(pos.Symbol)
+		candidates = append(candidates, CandidateCoin{
+			Symbol:  symbol,
+			Sources: []string{"oi_low"},
+		})
+	}
+	return candidates, nil
+}
+
+// getHyperAllCoins returns all available Hyperliquid perpetual coins
+func (e *StrategyEngine) getHyperAllCoins() ([]CandidateCoin, error) {
+	ctx := context.Background()
+	symbols, err := hyperliquid.GetAllCoinSymbols(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Hyperliquid coins: %w", err)
+	}
+
+	var candidates []CandidateCoin
+	for _, symbol := range symbols {
+		// Add USDT suffix for compatibility
+		normalizedSymbol := market.Normalize(symbol + "USDT")
+		candidates = append(candidates, CandidateCoin{
+			Symbol:  normalizedSymbol,
+			Sources: []string{"hyper_all"},
+		})
+	}
+	logger.Infof("✅ Loaded %d Hyperliquid coins (hyper_all)", len(candidates))
+	return candidates, nil
+}
+
+// getHyperMainCoins returns top N Hyperliquid coins by 24h volume
+func (e *StrategyEngine) getHyperMainCoins(limit int) ([]CandidateCoin, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	ctx := context.Background()
+	symbols, err := hyperliquid.GetMainCoinSymbols(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Hyperliquid main coins: %w", err)
+	}
+
+	var candidates []CandidateCoin
+	for _, symbol := range symbols {
+		// Add USDT suffix for compatibility
+		normalizedSymbol := market.Normalize(symbol + "USDT")
+		candidates = append(candidates, CandidateCoin{
+			Symbol:  normalizedSymbol,
+			Sources: []string{"hyper_main"},
+		})
+	}
+	logger.Infof("✅ Loaded %d Hyperliquid main coins (hyper_main) by 24h volume", len(candidates))
+	return candidates, nil
+}
+
+func clampHyperRankLimit(limit int) int {
+	if limit <= 0 {
+		return 5
+	}
+	if limit > 10 {
+		return 10
+	}
+	return limit
+}
+
+func (e *StrategyEngine) getHyperRankCoins(category, direction string, limit int) ([]CandidateCoin, error) {
+	category = strings.ToLower(strings.TrimSpace(category))
+	if category == "" {
+		category = "stock"
+	}
+	direction = strings.ToLower(strings.TrimSpace(direction))
+	if direction == "" {
+		direction = "gainers"
+	}
+	limit = clampHyperRankLimit(limit)
+
+	ctx := context.Background()
+	var ranked []struct {
+		symbol string
+		info   hyperliquid.CoinInfo
+		cat    string
+	}
+
+	if category == "crypto" || category == "all" {
+		coins, err := hyperliquid.GetPerpDexCoins(ctx, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Hyperliquid crypto ranking: %w", err)
+		}
+		for _, coin := range coins {
+			ranked = append(ranked, struct {
+				symbol string
+				info   hyperliquid.CoinInfo
+				cat    string
+			}{symbol: market.Normalize(coin.Symbol + "USDT"), info: coin, cat: "crypto"})
+		}
+	}
+
+	if category != "crypto" {
+		coins, err := hyperliquid.GetPerpDexCoins(ctx, "xyz")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Hyperliquid XYZ ranking: %w", err)
+		}
+		for _, coin := range coins {
+			base := strings.TrimPrefix(coin.Symbol, "xyz:")
+			cat := hyperliquid.XYZCategory(base)
+			if category != "all" && cat != category {
+				continue
+			}
+			ranked = append(ranked, struct {
+				symbol string
+				info   hyperliquid.CoinInfo
+				cat    string
+			}{symbol: hyperliquid.FormatCoinForAPI("xyz:" + base), info: coin, cat: cat})
+		}
+	}
+
+	sort.SliceStable(ranked, func(i, j int) bool {
+		switch direction {
+		case "losers":
+			return ranked[i].info.Change24hPct < ranked[j].info.Change24hPct
+		case "volume":
+			return ranked[i].info.Volume24h > ranked[j].info.Volume24h
+		default:
+			return ranked[i].info.Change24hPct > ranked[j].info.Change24hPct
+		}
+	})
+
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	candidates := make([]CandidateCoin, 0, len(ranked))
+	source := fmt.Sprintf("hyper_rank_%s_%s", category, direction)
+	for _, item := range ranked {
+		candidates = append(candidates, CandidateCoin{Symbol: item.symbol, Sources: []string{source}})
+	}
+	logger.Infof("✅ Loaded %d Hyperliquid rank coins (%s/%s, capped at %d)", len(candidates), category, direction, limit)
+	return candidates, nil
+}
+
+func (e *StrategyEngine) getVergexSignalCoins(limit int, marketType, chain, liqBand, category string, selectedSymbols []string) ([]CandidateCoin, error) {
+	if e.vergexClient == nil {
+		return nil, fmt.Errorf("vergex signal source requires a configured claw402 wallet")
+	}
+	if marketType == "" {
+		marketType = vergex.DefaultMarketType
+	}
+	chain = vergex.QueryChain(chain)
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > store.MaxCandidateCoins {
+		limit = store.MaxCandidateCoins
+	}
+	category = strings.ToLower(strings.TrimSpace(category))
+
+	// Never carry a stale signal snapshot into a new cycle when the board call
+	// fails. Callers can then distinguish "no valid snapshot" from a symbol that
+	// genuinely disappeared from a successfully fetched board.
+	e.vergexRankingCache = make(map[string]*vergex.DirectionChangeItem)
+	leaderboard, err := e.vergexClient.GetDirectionChangeLeaderboard(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch Vergex direction-change leaderboard: %w", err)
+	}
+
+	rankedItems := vergex.FilterDirectionChangeItems(leaderboard.Items, marketType, store.MaxCandidateCoins)
+	e.vergexRankingCache = make(map[string]*vergex.DirectionChangeItem, len(rankedItems))
+	for _, item := range rankedItems {
+		itemCopy := item
+		if symbol := vergex.TradableSymbolForMarket(item.MarketType, item.Symbol); symbol != "" {
+			e.vergexRankingCache[symbol] = &itemCopy
+		}
+	}
+
+	if len(selectedSymbols) > 0 {
+		candidates := make([]CandidateCoin, 0, minInt(len(selectedSymbols), limit))
+		seen := make(map[string]bool)
+		for _, raw := range selectedSymbols {
+			symbol := vergex.TradableSymbolForMarket(marketType, raw)
+			if symbol == "" || seen[symbol] {
+				continue
+			}
+			candidates = append(candidates, CandidateCoin{
+				Symbol:  symbol,
+				Sources: []string{"vergex_signal"},
+			})
+			seen[symbol] = true
+			if len(candidates) >= limit {
+				break
+			}
+		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("selected Claw402 symbols are not tradable %s items", marketType)
+		}
+		logger.Infof("✅ Loaded %d selected Vergex candidates (%s)", len(candidates), marketType)
+		return candidates, nil
+	}
+
+	// Direction-balanced selection: interleave the top bullish and top bearish
+	// signals so the candidate universe carries BOTH long and short ideas every
+	// cycle (instead of filling up with whichever bias ranks highest). This is
+	// what lets the AI actually judge — and trade — both directions.
+	var bullItems, bearItems, otherItems []vergex.DirectionChangeItem
+	for _, item := range rankedItems {
+		if category != "" && category != "all" && item.Category != category {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(item.Bias)) {
+		case "bearish", "short", "sell":
+			bearItems = append(bearItems, item)
+		case "bullish", "long", "buy":
+			bullItems = append(bullItems, item)
+		default:
+			otherItems = append(otherItems, item)
+		}
+	}
+	items := make([]vergex.DirectionChangeItem, 0, limit)
+	bi, ri, oi := 0, 0, 0
+	for len(items) < limit {
+		progressed := false
+		if bi < len(bullItems) {
+			items = append(items, bullItems[bi])
+			bi++
+			progressed = true
+			if len(items) >= limit {
+				break
+			}
+		}
+		if ri < len(bearItems) {
+			items = append(items, bearItems[ri])
+			ri++
+			progressed = true
+			if len(items) >= limit {
+				break
+			}
+		}
+		if !progressed {
+			if oi < len(otherItems) {
+				items = append(items, otherItems[oi])
+				oi++
+			} else {
+				break
+			}
+		}
+	}
+	if len(items) == 0 {
+		if category != "" && category != "all" {
+			return nil, fmt.Errorf("vergex direction board returned no tradable %s items in category %s", marketType, category)
+		}
+		return nil, fmt.Errorf("vergex direction board returned no tradable %s items", marketType)
+	}
+
+	candidates := make([]CandidateCoin, 0, len(items))
+	for _, item := range items {
+		itemCopy := item
+		symbol := vergex.TradableSymbolForMarket(item.MarketType, item.Symbol)
+		if symbol == "" {
+			continue
+		}
+		e.vergexRankingCache[symbol] = &itemCopy
+		candidates = append(candidates, CandidateCoin{
+			Symbol:  symbol,
+			Sources: []string{"vergex_signal"},
+		})
+	}
+	logger.Infof("✅ Loaded %d Vergex signal candidates (%s/%s, capped at %d)", len(candidates), marketType, withDefaultText(category, "all"), limit)
+	return candidates, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// DirectionalCandidate is a Vergex board candidate with its directional
+// signal strength (the board z-score; sign follows the bias direction).
+type DirectionalCandidate struct {
+	Symbol string
+	Score  float64
+}
+
+// DirectionalCandidates returns bullish (long) and bearish (short) candidates
+// from the most recent Vergex direction board, each ordered by upstream rank
+// (strongest first) and carrying the signal score so callers can require a
+// minimum strength. Only populated for vergex_signal coin sources, since that
+// is the only source carrying a per-symbol directional bias.
+func (e *StrategyEngine) DirectionalCandidates() (bullish []DirectionalCandidate, bearish []DirectionalCandidate) {
+	if e == nil || len(e.vergexRankingCache) == 0 {
+		return nil, nil
+	}
+	type ranked struct {
+		cand DirectionalCandidate
+		rank int
+	}
+	rankKey := func(r int) int {
+		if r > 0 {
+			return r
+		}
+		return 1 << 30
+	}
+	var bl, br []ranked
+	for sym, item := range e.vergexRankingCache {
+		if item == nil {
+			continue
+		}
+		entry := ranked{DirectionalCandidate{Symbol: sym, Score: item.Score}, item.Rank}
+		switch strings.ToLower(strings.TrimSpace(item.Bias)) {
+		case "bearish", "short", "sell":
+			br = append(br, entry)
+		case "bullish", "long", "buy":
+			bl = append(bl, entry)
+		}
+	}
+	sort.SliceStable(bl, func(i, j int) bool { return rankKey(bl[i].rank) < rankKey(bl[j].rank) })
+	sort.SliceStable(br, func(i, j int) bool { return rankKey(br[i].rank) < rankKey(br[j].rank) })
+	for _, r := range bl {
+		bullish = append(bullish, r.cand)
+	}
+	for _, r := range br {
+		bearish = append(bearish, r.cand)
+	}
+	return bullish, bearish
+}
+
+// HasVergexSignalSnapshot reports whether the current cycle fetched a usable
+// direction board. An empty cache means the policy must not trade on absence.
+func (e *StrategyEngine) HasVergexSignalSnapshot() bool {
+	return e != nil && len(e.vergexRankingCache) > 0
+}
+
+// VergexSignalBias returns the canonical current board direction for a symbol.
+// QuerySymbol makes BTC/BTCUSDT and xyz:NVDA/NVDA resolve to the same market.
+func (e *StrategyEngine) VergexSignalBias(symbol string) (string, bool) {
+	if e == nil || len(e.vergexRankingCache) == 0 {
+		return "", false
+	}
+	target := vergex.QuerySymbol(symbol)
+	if target == "" {
+		return "", false
+	}
+	for cachedSymbol, item := range e.vergexRankingCache {
+		if item == nil || vergex.QuerySymbol(cachedSymbol) != target {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(item.Bias)) {
+		case "bullish", "long", "buy":
+			return "bullish", true
+		case "bearish", "short", "sell":
+			return "bearish", true
+		default:
+			return "neutral", true
+		}
+	}
+	return "", false
+}
+
+func withDefaultText(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 // ============================================================================
@@ -667,6 +1029,10 @@ func (e *StrategyEngine) FetchQuantData(symbol string) (*QuantData, error) {
 	if !e.config.Indicators.EnableQuantData {
 		return nil, nil
 	}
+	if e.usesHyperliquidNativeUniverse() || market.IsXyzDexAsset(symbol) {
+		logger.Infof("⏭️  Skipping NofxOS quant data for Hyperliquid symbol %s; using native Hyperliquid klines/mark data only", symbol)
+		return nil, nil
+	}
 
 	// Use nofxos client with unified API key
 	include := "oi,price"
@@ -757,10 +1123,344 @@ func (e *StrategyEngine) FetchQuantDataBatch(symbols []string) map[string]*Quant
 	return result
 }
 
+func (e *StrategyEngine) FetchVergexDataBatch(ctx context.Context, symbols []string) map[string]*vergex.MarketAnalysis {
+	result := make(map[string]*vergex.MarketAnalysis)
+	if e == nil || e.config == nil || e.config.CoinSource.SourceType != "vergex_signal" {
+		return result
+	}
+	if e.vergexClient == nil {
+		logger.Warnf("⚠️ Vergex signal data skipped: claw402 wallet is not configured")
+		return result
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	source := e.config.CoinSource
+	marketType := source.VergexMarketType
+	if marketType == "" {
+		marketType = vergex.DefaultMarketType
+	}
+	chain := source.VergexChain
+	chain = vergex.QueryChain(chain)
+
+	seen := make(map[string]bool)
+	limited := make([]string, 0, store.MaxCandidateCoins)
+	for _, symbol := range symbols {
+		symbol = vergexDetailSymbolForLookup(marketType, symbol)
+		if symbol == "" {
+			continue
+		}
+		if seen[symbol] {
+			continue
+		}
+		seen[symbol] = true
+		limited = append(limited, symbol)
+		if len(limited) >= store.MaxCandidateCoins+store.MaxPositions {
+			break
+		}
+	}
+
+	type vergexAnalysisResult struct {
+		symbol   string
+		analysis *vergex.MarketAnalysis
+	}
+
+	resultCh := make(chan vergexAnalysisResult, len(limited))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, vergexDetailSymbolConcurrency)
+	for _, symbol := range limited {
+		symbol := symbol
+		querySymbol := vergex.QuerySymbol(symbol)
+		if querySymbol == "" {
+			continue
+		}
+		itemMarketType := marketType
+		itemCategory := ""
+		var ranking *vergex.DirectionChangeItem
+		if cached, ok := e.vergexRankingCache[symbol]; ok && cached != nil {
+			ranking = cached
+			if cached.APISymbol != "" {
+				querySymbol = cached.APISymbol
+			}
+			if cached.MarketType != "" {
+				itemMarketType = cached.MarketType
+			}
+			itemCategory = cached.Category
+		}
+
+		analysis := &vergex.MarketAnalysis{
+			Symbol:      symbol,
+			QuerySymbol: querySymbol,
+			MarketType:  itemMarketType,
+			Ranking:     ranking,
+		}
+		query := vergex.Query{
+			MarketType: itemMarketType,
+			Symbol:     symbol,
+			Chain:      chain,
+			LiqBand:    source.VergexLiqBand,
+			Category:   itemCategory,
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				analysis.DirectionCurrentError = ctx.Err().Error()
+				analysis.DirectionHistoryError = ctx.Err().Error()
+				analysis.HeatmapError = ctx.Err().Error()
+				resultCh <- vergexAnalysisResult{symbol: symbol, analysis: analysis}
+				return
+			}
+			e.populateVergexDetailData(ctx, analysis, query)
+			if len(analysis.DirectionCurrent) > 0 || len(analysis.DirectionHistory) > 0 || len(analysis.Heatmap) > 0 ||
+				analysis.DirectionCurrentError != "" || analysis.DirectionHistoryError != "" || analysis.HeatmapError != "" || analysis.Ranking != nil {
+				resultCh <- vergexAnalysisResult{symbol: symbol, analysis: analysis}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(resultCh)
+	for item := range resultCh {
+		result[item.symbol] = item.analysis
+	}
+
+	logger.Infof("📊 Vergex detail data ready for %d symbols", len(result))
+	return result
+}
+
+func vergexDataForSymbol(ctx *Context, symbol string) *vergex.MarketAnalysis {
+	if data := ctx.VergexDataMap[symbol]; data != nil {
+		return data
+	}
+	return ctx.VergexDataMap[vergexDetailSymbolForLookup("all", symbol)]
+}
+
+func vergexDetailSymbolForLookup(marketType, symbol string) string {
+	return vergex.TradableSymbolForMarket(marketType, symbol)
+}
+
+const (
+	vergexDetailRequestTimeout    = 45 * time.Second
+	vergexDetailSymbolConcurrency = 2
+)
+
+func (e *StrategyEngine) populateVergexDetailData(ctx context.Context, analysis *vergex.MarketAnalysis, query vergex.Query) {
+	type endpointResult struct {
+		name string
+		body json.RawMessage
+		err  error
+	}
+
+	run := func(name string, fetch func(context.Context) (json.RawMessage, error), out chan<- endpointResult) {
+		requestCtx, cancel := context.WithTimeout(ctx, vergexDetailRequestTimeout)
+		defer cancel()
+		body, err := fetch(requestCtx)
+		out <- endpointResult{name: name, body: body, err: err}
+	}
+
+	out := make(chan endpointResult, 4)
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		run("direction-current", func(requestCtx context.Context) (json.RawMessage, error) {
+			return e.vergexClient.GetDirectionChangeCurrent(requestCtx, analysis.QuerySymbol)
+		}, out)
+	}()
+	go func() {
+		defer wg.Done()
+		run("direction-history", func(requestCtx context.Context) (json.RawMessage, error) {
+			return e.vergexClient.GetDirectionChangeHistory(requestCtx, analysis.QuerySymbol, "all", 1, 20)
+		}, out)
+	}()
+	go func() {
+		defer wg.Done()
+		run("heatmap", func(requestCtx context.Context) (json.RawMessage, error) {
+			return e.fetchVergexHeatmapWithFallback(requestCtx, query)
+		}, out)
+	}()
+	go func() {
+		defer wg.Done()
+		run("winrate", func(requestCtx context.Context) (json.RawMessage, error) {
+			return e.fetchVergexWinrateWithFallback(requestCtx, query)
+		}, out)
+	}()
+	wg.Wait()
+	close(out)
+
+	for item := range out {
+		switch item.name {
+		case "direction-current":
+			if item.err != nil {
+				logger.Warnf("⚠️ Failed to fetch Vergex current direction for %s: %v", analysis.Symbol, item.err)
+				analysis.DirectionCurrentError = item.err.Error()
+			} else {
+				analysis.DirectionCurrent = item.body
+			}
+		case "direction-history":
+			if item.err != nil {
+				logger.Warnf("⚠️ Failed to fetch Vergex direction history for %s: %v", analysis.Symbol, item.err)
+				analysis.DirectionHistoryError = item.err.Error()
+			} else {
+				analysis.DirectionHistory = item.body
+			}
+		case "heatmap":
+			if item.err != nil {
+				logger.Warnf("⚠️ Failed to fetch Vergex heatmap for %s: %v", analysis.Symbol, item.err)
+				analysis.HeatmapError = item.err.Error()
+			} else {
+				analysis.Heatmap = item.body
+			}
+		case "winrate":
+			if item.err != nil {
+				logger.Warnf("⚠️ Failed to fetch Vergex win-rate matrix for %s: %v", analysis.Symbol, item.err)
+				analysis.WinrateError = item.err.Error()
+			} else {
+				analysis.Winrate = item.body
+			}
+		}
+	}
+}
+
+// fetchVergexWinrateWithFallback pulls the holder win-rate matrix with the
+// near-price banding (±8% of the current price) that concentrates the grid on
+// the actionable zone around price, retrying across marketType/chain
+// candidates exactly like the heatmap fetch.
+func (e *StrategyEngine) fetchVergexWinrateWithFallback(ctx context.Context, query vergex.Query) (json.RawMessage, error) {
+	var lastErr error
+	for idx, candidate := range vergexDetailQueryCandidates(query) {
+		body, err := e.vergexClient.GetHolderWinrateMap(ctx, vergex.WinrateQuery{
+			MarketType:    candidate.MarketType,
+			Symbol:        candidate.Symbol,
+			Chain:         candidate.Chain,
+			WinMin:        0,
+			WinMax:        100,
+			CostMin:       92,
+			CostMax:       108,
+			MinRoundTrips: 1,
+		})
+		if err == nil {
+			if idx > 0 {
+				logger.Infof("✅ Vergex win-rate matrix succeeded with fallback marketType=%s chain=%s", candidate.MarketType, withDefaultText(candidate.Chain, "default"))
+			}
+			return body, nil
+		}
+		lastErr = err
+		if !isRetryableVergexDetailError(err) {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+func (e *StrategyEngine) fetchVergexHeatmapWithFallback(ctx context.Context, query vergex.Query) (json.RawMessage, error) {
+	var lastErr error
+	for idx, candidate := range vergexDetailQueryCandidates(query) {
+		body, err := e.vergexClient.GetCostLiquidationHeatmap(ctx, candidate)
+		if err == nil {
+			if idx > 0 {
+				logger.Infof("✅ Vergex heatmap succeeded with fallback marketType=%s chain=%s", candidate.MarketType, withDefaultText(candidate.Chain, "default"))
+			}
+			return body, nil
+		}
+		lastErr = err
+		if !isRetryableVergexDetailError(err) {
+			break
+		}
+	}
+	return nil, lastErr
+}
+
+func vergexDetailQueryCandidates(query vergex.Query) []vergex.Query {
+	marketTypes := vergexDetailMarketTypeCandidates(query)
+	chains := uniqueValues(query.Chain, "mainnet", "")
+
+	candidates := make([]vergex.Query, 0, len(marketTypes)*len(chains))
+	for _, marketType := range marketTypes {
+		for _, chain := range chains {
+			candidate := query
+			candidate.MarketType = marketType
+			candidate.Chain = chain
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
+}
+
+func vergexDetailMarketTypeCandidates(query vergex.Query) []string {
+	if isVergexAllMarketType(query.MarketType) {
+		if market.IsXyzDexAsset(query.Symbol) {
+			return uniqueNonEmpty(vergex.DefaultMarketType, "hip3-perp", "hip3Perp", "core_perp")
+		}
+		return uniqueNonEmpty("core_perp", vergex.DefaultMarketType, "hip3-perp", "hip3Perp")
+	}
+	values := []string{query.MarketType, vergex.DefaultMarketType, "hip3-perp", "hip3Perp", "core_perp"}
+	return uniqueNonEmpty(values...)
+}
+
+func isVergexAllMarketType(marketType string) bool {
+	switch strings.ToLower(strings.TrimSpace(marketType)) {
+	case "", "all", "any", "ranking", "claw402", "vergex":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRetryableVergexDetailError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid markettype") ||
+		strings.Contains(msg, "invalid_request") ||
+		strings.Contains(msg, "invalid chain") ||
+		strings.Contains(msg, "market not found") ||
+		strings.Contains(msg, "not_found")
+}
+
+func uniqueNonEmpty(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func uniqueValues(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
 // FetchOIRankingData fetches market-wide OI ranking data
 func (e *StrategyEngine) FetchOIRankingData() *nofxos.OIRankingData {
 	indicators := e.config.Indicators
 	if !indicators.EnableOIRanking {
+		return nil
+	}
+	if e.usesHyperliquidNativeUniverse() {
+		logger.Infof("⏭️  Skipping NofxOS OI ranking for Hyperliquid strategy; native Hyperliquid universe is the source of truth")
 		return nil
 	}
 
@@ -792,6 +1492,10 @@ func (e *StrategyEngine) FetchOIRankingData() *nofxos.OIRankingData {
 func (e *StrategyEngine) FetchNetFlowRankingData() *nofxos.NetFlowRankingData {
 	indicators := e.config.Indicators
 	if !indicators.EnableNetFlowRanking {
+		return nil
+	}
+	if e.usesHyperliquidNativeUniverse() {
+		logger.Infof("⏭️  Skipping NofxOS netflow ranking for Hyperliquid strategy; native Hyperliquid universe is the source of truth")
 		return nil
 	}
 
@@ -826,6 +1530,10 @@ func (e *StrategyEngine) FetchPriceRankingData() *nofxos.PriceRankingData {
 	if !indicators.EnablePriceRanking {
 		return nil
 	}
+	if e.usesHyperliquidNativeUniverse() {
+		logger.Infof("⏭️  Skipping NofxOS price ranking for Hyperliquid strategy; native Hyperliquid universe is the source of truth")
+		return nil
+	}
 
 	durations := indicators.PriceRankingDuration
 	if durations == "" {
@@ -848,1026 +1556,6 @@ func (e *StrategyEngine) FetchPriceRankingData() *nofxos.PriceRankingData {
 	logger.Infof("✓ Price ranking data ready for %d durations", len(data.Durations))
 
 	return data
-}
-
-// ============================================================================
-// Prompt Building - System Prompt
-// ============================================================================
-
-// BuildSystemPrompt builds System Prompt according to strategy configuration
-func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string) string {
-	var sb strings.Builder
-	riskControl := e.config.RiskControl
-	promptSections := e.config.PromptSections
-
-	// 0. Data Dictionary & Schema (ensure AI understands all fields)
-	lang := e.GetLanguage()
-	schemaPrompt := GetSchemaPrompt(lang)
-	sb.WriteString(schemaPrompt)
-	sb.WriteString("\n\n")
-	sb.WriteString("---\n\n")
-
-	// 1. Role definition (editable)
-	if promptSections.RoleDefinition != "" {
-		sb.WriteString(promptSections.RoleDefinition)
-		sb.WriteString("\n\n")
-	} else {
-		sb.WriteString("# You are a professional cryptocurrency trading AI\n\n")
-		sb.WriteString("Your task is to make trading decisions based on provided market data.\n\n")
-	}
-
-	// 2. Trading mode variant
-	switch strings.ToLower(strings.TrimSpace(variant)) {
-	case "aggressive":
-		sb.WriteString("## Mode: Aggressive\n- Prioritize capturing trend breakouts, can build positions in batches when confidence ≥ 70\n- Allow higher positions, but must strictly set stop-loss and explain risk-reward ratio\n\n")
-	case "conservative":
-		sb.WriteString("## Mode: Conservative\n- Only open positions when multiple signals resonate\n- Prioritize cash preservation, must pause for multiple periods after consecutive losses\n\n")
-	case "scalping":
-		sb.WriteString("## Mode: Scalping\n- Focus on short-term momentum, smaller profit targets but require quick action\n- If price doesn't move as expected within two bars, immediately reduce position or stop-loss\n\n")
-	}
-
-	// 3. Hard constraints (risk control)
-	btcEthPosValueRatio := riskControl.BTCETHMaxPositionValueRatio
-	if btcEthPosValueRatio <= 0 {
-		btcEthPosValueRatio = 5.0
-	}
-	altcoinPosValueRatio := riskControl.AltcoinMaxPositionValueRatio
-	if altcoinPosValueRatio <= 0 {
-		altcoinPosValueRatio = 1.0
-	}
-
-	sb.WriteString("# Hard Constraints (Risk Control)\n\n")
-	sb.WriteString("## CODE ENFORCED (Backend validation, cannot be bypassed):\n")
-	sb.WriteString(fmt.Sprintf("- Max Positions: %d coins simultaneously\n", riskControl.MaxPositions))
-	sb.WriteString(fmt.Sprintf("- Position Value Limit (Altcoins): max %.0f USDT (= equity %.0f × %.1fx)\n",
-		accountEquity*altcoinPosValueRatio, accountEquity, altcoinPosValueRatio))
-	sb.WriteString(fmt.Sprintf("- Position Value Limit (BTC/ETH): max %.0f USDT (= equity %.0f × %.1fx)\n",
-		accountEquity*btcEthPosValueRatio, accountEquity, btcEthPosValueRatio))
-	sb.WriteString(fmt.Sprintf("- Max Margin Usage: ≤%.0f%%\n", riskControl.MaxMarginUsage*100))
-	sb.WriteString(fmt.Sprintf("- Min Position Size: ≥%.0f USDT\n\n", riskControl.MinPositionSize))
-
-	sb.WriteString("## AI GUIDED (Recommended, you should follow):\n")
-	sb.WriteString(fmt.Sprintf("- Trading Leverage: Altcoins max %dx | BTC/ETH max %dx\n",
-		riskControl.AltcoinMaxLeverage, riskControl.BTCETHMaxLeverage))
-	sb.WriteString(fmt.Sprintf("- Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss)\n", riskControl.MinRiskRewardRatio))
-	sb.WriteString(fmt.Sprintf("- Min Confidence: ≥%d to open position\n\n", riskControl.MinConfidence))
-
-	// Position sizing guidance
-	sb.WriteString("## Position Sizing Guidance\n")
-	sb.WriteString("Calculate `position_size_usd` based on your confidence and the Position Value Limits above:\n")
-	sb.WriteString("- High confidence (≥85): Use 80-100%% of max position value limit\n")
-	sb.WriteString("- Medium confidence (70-84): Use 50-80%% of max position value limit\n")
-	sb.WriteString("- Low confidence (60-69): Use 30-50%% of max position value limit\n")
-	sb.WriteString(fmt.Sprintf("- Example: With equity %.0f and BTC/ETH ratio %.1fx, max is %.0f USDT\n",
-		accountEquity, btcEthPosValueRatio, accountEquity*btcEthPosValueRatio))
-	sb.WriteString("- **DO NOT** just use available_balance as position_size_usd. Use the Position Value Limits!\n\n")
-
-	// 4. Trading frequency (editable)
-	if promptSections.TradingFrequency != "" {
-		sb.WriteString(promptSections.TradingFrequency)
-		sb.WriteString("\n\n")
-	} else {
-		sb.WriteString("# ⏱️ Trading Frequency Awareness\n\n")
-		sb.WriteString("- Excellent traders: 2-4 trades/day ≈ 0.1-0.2 trades/hour\n")
-		sb.WriteString("- >2 trades/hour = Overtrading\n")
-		sb.WriteString("- Single position hold time ≥ 30-60 minutes\n")
-		sb.WriteString("If you find yourself trading every period → standards too low; if closing positions < 30 minutes → too impatient.\n\n")
-	}
-
-	// 5. Entry standards (editable)
-	if promptSections.EntryStandards != "" {
-		sb.WriteString(promptSections.EntryStandards)
-		sb.WriteString("\n\nYou have the following indicator data:\n")
-		e.writeAvailableIndicators(&sb)
-		sb.WriteString(fmt.Sprintf("\n**Confidence ≥ %d** required to open positions.\n\n", riskControl.MinConfidence))
-	} else {
-		sb.WriteString("# 🎯 Entry Standards (Strict)\n\n")
-		sb.WriteString("Only open positions when multiple signals resonate. You have:\n")
-		e.writeAvailableIndicators(&sb)
-		sb.WriteString(fmt.Sprintf("\nFeel free to use any effective analysis method, but **confidence ≥ %d** required to open positions; avoid low-quality behaviors such as single indicators, contradictory signals, sideways consolidation, reopening immediately after closing, etc.\n\n", riskControl.MinConfidence))
-	}
-
-	// 6. Decision process (editable)
-	if promptSections.DecisionProcess != "" {
-		sb.WriteString(promptSections.DecisionProcess)
-		sb.WriteString("\n\n")
-	} else {
-		sb.WriteString("# 📋 Decision Process\n\n")
-		sb.WriteString("1. Check positions → Should we take profit/stop-loss\n")
-		sb.WriteString("2. Scan candidate coins + multi-timeframe → Are there strong signals\n")
-		sb.WriteString("3. Write chain of thought first, then output structured JSON\n\n")
-	}
-
-	// 7. Output format
-	sb.WriteString("# Output Format (Strictly Follow)\n\n")
-	sb.WriteString("**Must use XML tags <reasoning> and <decision> to separate chain of thought and decision JSON, avoiding parsing errors**\n\n")
-	sb.WriteString("## Format Requirements\n\n")
-	sb.WriteString("<reasoning>\n")
-	sb.WriteString("Your chain of thought analysis...\n")
-	sb.WriteString("- Briefly analyze your thinking process \n")
-	sb.WriteString("</reasoning>\n\n")
-	sb.WriteString("<decision>\n")
-	sb.WriteString("Step 2: JSON decision array\n\n")
-	sb.WriteString("```json\n[\n")
-	// Use the actual configured position value ratio for BTC/ETH in the example
-	examplePositionSize := accountEquity * btcEthPosValueRatio
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300},\n",
-		riskControl.BTCETHMaxLeverage, examplePositionSize))
-	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\"}\n")
-	sb.WriteString("]\n```\n")
-	sb.WriteString("</decision>\n\n")
-	sb.WriteString("## Field Description\n\n")
-	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
-	sb.WriteString(fmt.Sprintf("- `confidence`: 0-100 (opening recommended ≥ %d)\n", riskControl.MinConfidence))
-	sb.WriteString("- Required when opening: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd\n")
-	sb.WriteString("- **IMPORTANT**: All numeric values must be calculated numbers, NOT formulas/expressions (e.g., use `27.76` not `3000 * 0.01`)\n\n")
-
-	// 8. Custom Prompt
-	if e.config.CustomPrompt != "" {
-		sb.WriteString("# 📌 Personalized Trading Strategy\n\n")
-		sb.WriteString(e.config.CustomPrompt)
-		sb.WriteString("\n\n")
-		sb.WriteString("Note: The above personalized strategy is a supplement to the basic rules and cannot violate the basic risk control principles.\n")
-	}
-
-	return sb.String()
-}
-
-func (e *StrategyEngine) writeAvailableIndicators(sb *strings.Builder) {
-	indicators := e.config.Indicators
-	kline := indicators.Klines
-
-	sb.WriteString(fmt.Sprintf("- %s price series", kline.PrimaryTimeframe))
-	if kline.EnableMultiTimeframe {
-		sb.WriteString(fmt.Sprintf(" + %s K-line series\n", kline.LongerTimeframe))
-	} else {
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableEMA {
-		sb.WriteString("- EMA indicators")
-		if len(indicators.EMAPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.EMAPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableMACD {
-		sb.WriteString("- MACD indicators\n")
-	}
-
-	if indicators.EnableRSI {
-		sb.WriteString("- RSI indicators")
-		if len(indicators.RSIPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.RSIPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableATR {
-		sb.WriteString("- ATR indicators")
-		if len(indicators.ATRPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.ATRPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableBOLL {
-		sb.WriteString("- Bollinger Bands (BOLL) - Upper/Middle/Lower bands")
-		if len(indicators.BOLLPeriods) > 0 {
-			sb.WriteString(fmt.Sprintf(" (periods: %v)", indicators.BOLLPeriods))
-		}
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableVolume {
-		sb.WriteString("- Volume data\n")
-	}
-
-	if indicators.EnableOI {
-		sb.WriteString("- Open Interest (OI) data\n")
-	}
-
-	if indicators.EnableFundingRate {
-		sb.WriteString("- Funding rate\n")
-	}
-
-	if len(e.config.CoinSource.StaticCoins) > 0 || e.config.CoinSource.UseAI500 || e.config.CoinSource.UseOITop {
-		sb.WriteString("- AI500 / OI_Top filter tags (if available)\n")
-	}
-
-	if indicators.EnableQuantData {
-		sb.WriteString("- Quantitative data (institutional/retail fund flow, position changes, multi-period price changes)\n")
-	}
-}
-
-// ============================================================================
-// Prompt Building - User Prompt
-// ============================================================================
-
-// BuildUserPrompt builds User Prompt based on strategy configuration
-func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
-	var sb strings.Builder
-
-	// System status
-	sb.WriteString(fmt.Sprintf("Time: %s | Period: #%d | Runtime: %d minutes\n\n",
-		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
-
-	// BTC market
-	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("BTC: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
-	}
-
-	// Account information
-	sb.WriteString(fmt.Sprintf("Account: Equity %.2f | Balance %.2f (%.1f%%) | PnL %+.2f%% | Margin %.1f%% | Positions %d\n\n",
-		ctx.Account.TotalEquity,
-		ctx.Account.AvailableBalance,
-		(ctx.Account.AvailableBalance/ctx.Account.TotalEquity)*100,
-		ctx.Account.TotalPnLPct,
-		ctx.Account.MarginUsedPct,
-		ctx.Account.PositionCount))
-
-	// Recently completed orders (placed before positions to ensure visibility)
-	if len(ctx.RecentOrders) > 0 {
-		sb.WriteString("## Recent Completed Trades\n")
-		for i, order := range ctx.RecentOrders {
-			resultStr := "Profit"
-			if order.RealizedPnL < 0 {
-				resultStr = "Loss"
-			}
-			sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f Exit %.4f | %s: %+.2f USDT (%+.2f%%) | %s→%s (%s)\n",
-				i+1, order.Symbol, order.Side,
-				order.EntryPrice, order.ExitPrice,
-				resultStr, order.RealizedPnL, order.PnLPct,
-				order.EntryTime, order.ExitTime, order.HoldDuration))
-		}
-		sb.WriteString("\n")
-	}
-
-	// Historical trading statistics (helps AI understand past performance)
-	if ctx.TradingStats != nil && ctx.TradingStats.TotalTrades > 0 {
-		// Get language from strategy config
-		lang := e.GetLanguage()
-
-		// Win/Loss ratio
-		var winLossRatio float64
-		if ctx.TradingStats.AvgLoss > 0 {
-			winLossRatio = ctx.TradingStats.AvgWin / ctx.TradingStats.AvgLoss
-		}
-
-		if lang == LangChinese {
-			sb.WriteString("## 历史交易统计\n")
-			sb.WriteString(fmt.Sprintf("总交易: %d 笔 | 盈利因子: %.2f | 夏普比率: %.2f | 盈亏比: %.2f\n",
-				ctx.TradingStats.TotalTrades,
-				ctx.TradingStats.ProfitFactor,
-				ctx.TradingStats.SharpeRatio,
-				winLossRatio))
-			sb.WriteString(fmt.Sprintf("总盈亏: %+.2f USDT | 平均盈利: +%.2f | 平均亏损: -%.2f | 最大回撤: %.1f%%\n",
-				ctx.TradingStats.TotalPnL,
-				ctx.TradingStats.AvgWin,
-				ctx.TradingStats.AvgLoss,
-				ctx.TradingStats.MaxDrawdownPct))
-
-			// Performance hints based on profit factor, sharpe, and drawdown
-			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
-				sb.WriteString("表现: 良好 - 保持当前策略\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
-				sb.WriteString("表现: 需改进 - 提高盈亏比，优化止盈止损\n")
-			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
-				sb.WriteString("表现: 风险偏高 - 减少仓位，控制回撤\n")
-			} else {
-				sb.WriteString("表现: 正常 - 有优化空间\n")
-			}
-		} else {
-			sb.WriteString("## Historical Trading Statistics\n")
-			sb.WriteString(fmt.Sprintf("Total Trades: %d | Profit Factor: %.2f | Sharpe: %.2f | Win/Loss Ratio: %.2f\n",
-				ctx.TradingStats.TotalTrades,
-				ctx.TradingStats.ProfitFactor,
-				ctx.TradingStats.SharpeRatio,
-				winLossRatio))
-			sb.WriteString(fmt.Sprintf("Total PnL: %+.2f USDT | Avg Win: +%.2f | Avg Loss: -%.2f | Max Drawdown: %.1f%%\n",
-				ctx.TradingStats.TotalPnL,
-				ctx.TradingStats.AvgWin,
-				ctx.TradingStats.AvgLoss,
-				ctx.TradingStats.MaxDrawdownPct))
-
-			// Performance hints based on profit factor, sharpe, and drawdown
-			if ctx.TradingStats.ProfitFactor >= 1.5 && ctx.TradingStats.SharpeRatio >= 1 {
-				sb.WriteString("Performance: GOOD - maintain current strategy\n")
-			} else if ctx.TradingStats.ProfitFactor < 1 {
-				sb.WriteString("Performance: NEEDS IMPROVEMENT - improve win/loss ratio, optimize TP/SL\n")
-			} else if ctx.TradingStats.MaxDrawdownPct > 30 {
-				sb.WriteString("Performance: HIGH RISK - reduce position size, control drawdown\n")
-			} else {
-				sb.WriteString("Performance: NORMAL - room for optimization\n")
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	// Position information
-	if len(ctx.Positions) > 0 {
-		sb.WriteString("## Current Positions\n")
-		for i, pos := range ctx.Positions {
-			sb.WriteString(e.formatPositionInfo(i+1, pos, ctx))
-		}
-	} else {
-		sb.WriteString("Current Positions: None\n\n")
-	}
-
-	// Candidate coins (exclude coins already in positions to avoid duplicate data)
-	positionSymbols := make(map[string]bool)
-	for _, pos := range ctx.Positions {
-		// Normalize symbol to handle both "ETH" and "ETHUSDT" formats
-		normalizedSymbol := market.Normalize(pos.Symbol)
-		positionSymbols[normalizedSymbol] = true
-	}
-
-	sb.WriteString(fmt.Sprintf("## Candidate Coins (%d coins)\n\n", len(ctx.MarketDataMap)))
-	displayedCount := 0
-	for _, coin := range ctx.CandidateCoins {
-		// Skip if this coin is already a position (data already shown in positions section)
-		normalizedCoinSymbol := market.Normalize(coin.Symbol)
-		if positionSymbols[normalizedCoinSymbol] {
-			continue
-		}
-
-		marketData, hasData := ctx.MarketDataMap[coin.Symbol]
-		if !hasData {
-			continue
-		}
-		displayedCount++
-
-		sourceTags := e.formatCoinSourceTag(coin.Sources)
-		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
-		sb.WriteString(e.formatMarketData(marketData))
-
-		if ctx.QuantDataMap != nil {
-			if quantData, hasQuant := ctx.QuantDataMap[coin.Symbol]; hasQuant {
-				sb.WriteString(e.formatQuantData(quantData))
-			}
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\n")
-
-	// Get language for market data formatting
-	nofxosLang := nofxos.LangEnglish
-	if e.GetLanguage() == LangChinese {
-		nofxosLang = nofxos.LangChinese
-	}
-
-	// OI Ranking data (market-wide open interest changes)
-	if ctx.OIRankingData != nil {
-		sb.WriteString(nofxos.FormatOIRankingForAI(ctx.OIRankingData, nofxosLang))
-	}
-
-	// NetFlow Ranking data (market-wide fund flow)
-	if ctx.NetFlowRankingData != nil {
-		sb.WriteString(nofxos.FormatNetFlowRankingForAI(ctx.NetFlowRankingData, nofxosLang))
-	}
-
-	// Price Ranking data (market-wide gainers/losers)
-	if ctx.PriceRankingData != nil {
-		sb.WriteString(nofxos.FormatPriceRankingForAI(ctx.PriceRankingData, nofxosLang))
-	}
-
-	sb.WriteString("---\n\n")
-	sb.WriteString("Now please analyze and output your decision (Chain of Thought + JSON)\n")
-
-	return sb.String()
-}
-
-func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Context) string {
-	var sb strings.Builder
-
-	holdingDuration := ""
-	if pos.UpdateTime > 0 {
-		durationMs := time.Now().UnixMilli() - pos.UpdateTime
-		durationMin := durationMs / (1000 * 60)
-		if durationMin < 60 {
-			holdingDuration = fmt.Sprintf(" | Holding Duration %d min", durationMin)
-		} else {
-			durationHour := durationMin / 60
-			durationMinRemainder := durationMin % 60
-			holdingDuration = fmt.Sprintf(" | Holding Duration %dh %dm", durationHour, durationMinRemainder)
-		}
-	}
-
-	positionValue := pos.Quantity * pos.MarkPrice
-	if positionValue < 0 {
-		positionValue = -positionValue
-	}
-
-	sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f Current %.4f | Qty %.4f | Position Value %.2f USDT | PnL%+.2f%% | PnL Amount%+.2f USDT | Peak PnL%.2f%% | Leverage %dx | Margin %.0f | Liq Price %.4f%s\n\n",
-		index, pos.Symbol, strings.ToUpper(pos.Side),
-		pos.EntryPrice, pos.MarkPrice, pos.Quantity, positionValue, pos.UnrealizedPnLPct, pos.UnrealizedPnL, pos.PeakPnLPct,
-		pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
-
-	if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
-		sb.WriteString(e.formatMarketData(marketData))
-
-		if ctx.QuantDataMap != nil {
-			if quantData, hasQuant := ctx.QuantDataMap[pos.Symbol]; hasQuant {
-				sb.WriteString(e.formatQuantData(quantData))
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
-func (e *StrategyEngine) formatCoinSourceTag(sources []string) string {
-	if len(sources) > 1 {
-		return " (AI500+OI_Top dual signal)"
-	} else if len(sources) == 1 {
-		switch sources[0] {
-		case "ai500":
-			return " (AI500)"
-		case "oi_top":
-			return " (OI_Top position growth)"
-		case "static":
-			return " (Manual selection)"
-		}
-	}
-	return ""
-}
-
-// ============================================================================
-// Market Data Formatting
-// ============================================================================
-
-func (e *StrategyEngine) formatMarketData(data *market.Data) string {
-	var sb strings.Builder
-	indicators := e.config.Indicators
-
-	// 明确标注币种
-	sb.WriteString(fmt.Sprintf("=== %s Market Data ===\n\n", data.Symbol))
-	sb.WriteString(fmt.Sprintf("current_price = %.4f", data.CurrentPrice))
-
-	if indicators.EnableEMA {
-		sb.WriteString(fmt.Sprintf(", current_ema20 = %.3f", data.CurrentEMA20))
-	}
-
-	if indicators.EnableMACD {
-		sb.WriteString(fmt.Sprintf(", current_macd = %.3f", data.CurrentMACD))
-	}
-
-	if indicators.EnableRSI {
-		sb.WriteString(fmt.Sprintf(", current_rsi7 = %.3f", data.CurrentRSI7))
-	}
-
-	sb.WriteString("\n\n")
-
-	if indicators.EnableOI || indicators.EnableFundingRate {
-		sb.WriteString(fmt.Sprintf("Additional data for %s:\n\n", data.Symbol))
-
-		if indicators.EnableOI && data.OpenInterest != nil {
-			sb.WriteString(fmt.Sprintf("Open Interest: Latest: %.2f Average: %.2f\n\n",
-				data.OpenInterest.Latest, data.OpenInterest.Average))
-		}
-
-		if indicators.EnableFundingRate {
-			sb.WriteString(fmt.Sprintf("Funding Rate: %.2e\n\n", data.FundingRate))
-		}
-	}
-
-	if len(data.TimeframeData) > 0 {
-		timeframeOrder := []string{"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"}
-		for _, tf := range timeframeOrder {
-			if tfData, ok := data.TimeframeData[tf]; ok {
-				sb.WriteString(fmt.Sprintf("=== %s Timeframe (oldest → latest) ===\n\n", strings.ToUpper(tf)))
-				e.formatTimeframeSeriesData(&sb, tfData, indicators)
-			}
-		}
-	} else {
-		// Compatible with old data format
-		if data.IntradaySeries != nil {
-			klineConfig := indicators.Klines
-			sb.WriteString(fmt.Sprintf("Intraday series (%s intervals, oldest → latest):\n\n", klineConfig.PrimaryTimeframe))
-
-			if len(data.IntradaySeries.MidPrices) > 0 {
-				sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.IntradaySeries.MidPrices)))
-			}
-
-			if indicators.EnableEMA && len(data.IntradaySeries.EMA20Values) > 0 {
-				sb.WriteString(fmt.Sprintf("EMA indicators (20-period): %s\n\n", formatFloatSlice(data.IntradaySeries.EMA20Values)))
-			}
-
-			if indicators.EnableMACD && len(data.IntradaySeries.MACDValues) > 0 {
-				sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.IntradaySeries.MACDValues)))
-			}
-
-			if indicators.EnableRSI {
-				if len(data.IntradaySeries.RSI7Values) > 0 {
-					sb.WriteString(fmt.Sprintf("RSI indicators (7-Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI7Values)))
-				}
-				if len(data.IntradaySeries.RSI14Values) > 0 {
-					sb.WriteString(fmt.Sprintf("RSI indicators (14-Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI14Values)))
-				}
-			}
-
-			if indicators.EnableVolume && len(data.IntradaySeries.Volume) > 0 {
-				sb.WriteString(fmt.Sprintf("Volume: %s\n\n", formatFloatSlice(data.IntradaySeries.Volume)))
-			}
-
-			if indicators.EnableATR {
-				sb.WriteString(fmt.Sprintf("3m ATR (14-period): %.3f\n\n", data.IntradaySeries.ATR14))
-			}
-		}
-
-		if data.LongerTermContext != nil && indicators.Klines.EnableMultiTimeframe {
-			sb.WriteString(fmt.Sprintf("Longer-term context (%s timeframe):\n\n", indicators.Klines.LongerTimeframe))
-
-			if indicators.EnableEMA {
-				sb.WriteString(fmt.Sprintf("20-Period EMA: %.3f vs. 50-Period EMA: %.3f\n\n",
-					data.LongerTermContext.EMA20, data.LongerTermContext.EMA50))
-			}
-
-			if indicators.EnableATR {
-				sb.WriteString(fmt.Sprintf("3-Period ATR: %.3f vs. 14-Period ATR: %.3f\n\n",
-					data.LongerTermContext.ATR3, data.LongerTermContext.ATR14))
-			}
-
-			if indicators.EnableVolume {
-				sb.WriteString(fmt.Sprintf("Current Volume: %.3f vs. Average Volume: %.3f\n\n",
-					data.LongerTermContext.CurrentVolume, data.LongerTermContext.AverageVolume))
-			}
-
-			if indicators.EnableMACD && len(data.LongerTermContext.MACDValues) > 0 {
-				sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.LongerTermContext.MACDValues)))
-			}
-
-			if indicators.EnableRSI && len(data.LongerTermContext.RSI14Values) > 0 {
-				sb.WriteString(fmt.Sprintf("RSI indicators (14-Period): %s\n\n", formatFloatSlice(data.LongerTermContext.RSI14Values)))
-			}
-		}
-	}
-
-	return sb.String()
-}
-
-func (e *StrategyEngine) formatTimeframeSeriesData(sb *strings.Builder, data *market.TimeframeSeriesData, indicators store.IndicatorConfig) {
-	if len(data.Klines) > 0 {
-		sb.WriteString("Time(UTC)      Open      High      Low       Close     Volume\n")
-		for i, k := range data.Klines {
-			t := time.Unix(k.Time/1000, 0).UTC()
-			timeStr := t.Format("01-02 15:04")
-			marker := ""
-			if i == len(data.Klines)-1 {
-				marker = "  <- current"
-			}
-			sb.WriteString(fmt.Sprintf("%-14s %-9.4f %-9.4f %-9.4f %-9.4f %-12.2f%s\n",
-				timeStr, k.Open, k.High, k.Low, k.Close, k.Volume, marker))
-		}
-		sb.WriteString("\n")
-	} else if len(data.MidPrices) > 0 {
-		sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.MidPrices)))
-		if indicators.EnableVolume && len(data.Volume) > 0 {
-			sb.WriteString(fmt.Sprintf("Volume: %s\n\n", formatFloatSlice(data.Volume)))
-		}
-	}
-
-	if indicators.EnableEMA {
-		if len(data.EMA20Values) > 0 {
-			sb.WriteString(fmt.Sprintf("EMA20: %s\n", formatFloatSlice(data.EMA20Values)))
-		}
-		if len(data.EMA50Values) > 0 {
-			sb.WriteString(fmt.Sprintf("EMA50: %s\n", formatFloatSlice(data.EMA50Values)))
-		}
-	}
-
-	if indicators.EnableMACD && len(data.MACDValues) > 0 {
-		sb.WriteString(fmt.Sprintf("MACD: %s\n", formatFloatSlice(data.MACDValues)))
-	}
-
-	if indicators.EnableRSI {
-		if len(data.RSI7Values) > 0 {
-			sb.WriteString(fmt.Sprintf("RSI7: %s\n", formatFloatSlice(data.RSI7Values)))
-		}
-		if len(data.RSI14Values) > 0 {
-			sb.WriteString(fmt.Sprintf("RSI14: %s\n", formatFloatSlice(data.RSI14Values)))
-		}
-	}
-
-	if indicators.EnableATR && data.ATR14 > 0 {
-		sb.WriteString(fmt.Sprintf("ATR14: %.4f\n", data.ATR14))
-	}
-
-	if indicators.EnableBOLL && len(data.BOLLUpper) > 0 {
-		sb.WriteString(fmt.Sprintf("BOLL Upper: %s\n", formatFloatSlice(data.BOLLUpper)))
-		sb.WriteString(fmt.Sprintf("BOLL Middle: %s\n", formatFloatSlice(data.BOLLMiddle)))
-		sb.WriteString(fmt.Sprintf("BOLL Lower: %s\n", formatFloatSlice(data.BOLLLower)))
-	}
-
-	sb.WriteString("\n")
-}
-
-func (e *StrategyEngine) formatQuantData(data *QuantData) string {
-	if data == nil {
-		return ""
-	}
-
-	indicators := e.config.Indicators
-	if !indicators.EnableQuantOI && !indicators.EnableQuantNetflow {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📊 %s Quantitative Data:\n", data.Symbol))
-
-	if len(data.PriceChange) > 0 {
-		sb.WriteString("Price Change: ")
-		timeframes := []string{"5m", "15m", "1h", "4h", "12h", "24h"}
-		parts := []string{}
-		for _, tf := range timeframes {
-			if v, ok := data.PriceChange[tf]; ok {
-				parts = append(parts, fmt.Sprintf("%s: %+.4f%%", tf, v*100))
-			}
-		}
-		sb.WriteString(strings.Join(parts, " | "))
-		sb.WriteString("\n")
-	}
-
-	if indicators.EnableQuantNetflow && data.Netflow != nil {
-		sb.WriteString("Fund Flow (Netflow):\n")
-		timeframes := []string{"5m", "15m", "1h", "4h", "12h", "24h"}
-
-		if data.Netflow.Institution != nil {
-			if data.Netflow.Institution.Future != nil && len(data.Netflow.Institution.Future) > 0 {
-				sb.WriteString("  Institutional Futures:\n")
-				for _, tf := range timeframes {
-					if v, ok := data.Netflow.Institution.Future[tf]; ok {
-						sb.WriteString(fmt.Sprintf("    %s: %s\n", tf, formatFlowValue(v)))
-					}
-				}
-			}
-			if data.Netflow.Institution.Spot != nil && len(data.Netflow.Institution.Spot) > 0 {
-				sb.WriteString("  Institutional Spot:\n")
-				for _, tf := range timeframes {
-					if v, ok := data.Netflow.Institution.Spot[tf]; ok {
-						sb.WriteString(fmt.Sprintf("    %s: %s\n", tf, formatFlowValue(v)))
-					}
-				}
-			}
-		}
-
-		if data.Netflow.Personal != nil {
-			if data.Netflow.Personal.Future != nil && len(data.Netflow.Personal.Future) > 0 {
-				sb.WriteString("  Retail Futures:\n")
-				for _, tf := range timeframes {
-					if v, ok := data.Netflow.Personal.Future[tf]; ok {
-						sb.WriteString(fmt.Sprintf("    %s: %s\n", tf, formatFlowValue(v)))
-					}
-				}
-			}
-			if data.Netflow.Personal.Spot != nil && len(data.Netflow.Personal.Spot) > 0 {
-				sb.WriteString("  Retail Spot:\n")
-				for _, tf := range timeframes {
-					if v, ok := data.Netflow.Personal.Spot[tf]; ok {
-						sb.WriteString(fmt.Sprintf("    %s: %s\n", tf, formatFlowValue(v)))
-					}
-				}
-			}
-		}
-	}
-
-	if indicators.EnableQuantOI && len(data.OI) > 0 {
-		for exchange, oiData := range data.OI {
-			if len(oiData.Delta) > 0 {
-				sb.WriteString(fmt.Sprintf("Open Interest (%s):\n", exchange))
-				for _, tf := range []string{"5m", "15m", "1h", "4h", "12h", "24h"} {
-					if d, ok := oiData.Delta[tf]; ok {
-						sb.WriteString(fmt.Sprintf("    %s: %+.4f%% (%s)\n", tf, d.OIDeltaPercent, formatFlowValue(d.OIDeltaValue)))
-					}
-				}
-			}
-		}
-	}
-
-	return sb.String()
-}
-
-func formatFlowValue(v float64) string {
-	sign := ""
-	if v >= 0 {
-		sign = "+"
-	}
-	absV := v
-	if absV < 0 {
-		absV = -absV
-	}
-	if absV >= 1e9 {
-		return fmt.Sprintf("%s%.2fB", sign, v/1e9)
-	} else if absV >= 1e6 {
-		return fmt.Sprintf("%s%.2fM", sign, v/1e6)
-	} else if absV >= 1e3 {
-		return fmt.Sprintf("%s%.2fK", sign, v/1e3)
-	}
-	return fmt.Sprintf("%s%.2f", sign, v)
-}
-
-func formatFloatSlice(values []float64) string {
-	strValues := make([]string, len(values))
-	for i, v := range values {
-		strValues[i] = fmt.Sprintf("%.4f", v)
-	}
-	return "[" + strings.Join(strValues, ", ") + "]"
-}
-
-// ============================================================================
-// AI Response Parsing
-// ============================================================================
-
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) (*FullDecision, error) {
-	cotTrace := extractCoTTrace(aiResponse)
-
-	decisions, err := extractDecisions(aiResponse)
-	if err != nil {
-		return &FullDecision{
-			CoTTrace:  cotTrace,
-			Decisions: []Decision{},
-		}, fmt.Errorf("failed to extract decisions: %w", err)
-	}
-
-	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio); err != nil {
-		return &FullDecision{
-			CoTTrace:  cotTrace,
-			Decisions: decisions,
-		}, fmt.Errorf("decision validation failed: %w", err)
-	}
-
-	return &FullDecision{
-		CoTTrace:  cotTrace,
-		Decisions: decisions,
-	}, nil
-}
-
-func extractCoTTrace(response string) string {
-	if match := reReasoningTag.FindStringSubmatch(response); match != nil && len(match) > 1 {
-		logger.Infof("✓ Extracted reasoning chain using <reasoning> tag")
-		return strings.TrimSpace(match[1])
-	}
-
-	if decisionIdx := strings.Index(response, "<decision>"); decisionIdx > 0 {
-		logger.Infof("✓ Extracted content before <decision> tag as reasoning chain")
-		return strings.TrimSpace(response[:decisionIdx])
-	}
-
-	jsonStart := strings.Index(response, "[")
-	if jsonStart > 0 {
-		logger.Infof("⚠️  Extracted reasoning chain using old format ([ character separator)")
-		return strings.TrimSpace(response[:jsonStart])
-	}
-
-	return strings.TrimSpace(response)
-}
-
-func extractDecisions(response string) ([]Decision, error) {
-	s := removeInvisibleRunes(response)
-	s = strings.TrimSpace(s)
-	s = fixMissingQuotes(s)
-
-	var jsonPart string
-	if match := reDecisionTag.FindStringSubmatch(s); match != nil && len(match) > 1 {
-		jsonPart = strings.TrimSpace(match[1])
-		logger.Infof("✓ Extracted JSON using <decision> tag")
-	} else {
-		jsonPart = s
-		logger.Infof("⚠️  <decision> tag not found, searching JSON in full text")
-	}
-
-	jsonPart = fixMissingQuotes(jsonPart)
-
-	if m := reJSONFence.FindStringSubmatch(jsonPart); m != nil && len(m) > 1 {
-		jsonContent := strings.TrimSpace(m[1])
-		jsonContent = compactArrayOpen(jsonContent)
-		jsonContent = fixMissingQuotes(jsonContent)
-		if err := validateJSONFormat(jsonContent); err != nil {
-			return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
-		}
-		var decisions []Decision
-		if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-			return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
-		}
-		return decisions, nil
-	}
-
-	jsonContent := strings.TrimSpace(reJSONArray.FindString(jsonPart))
-	if jsonContent == "" {
-		logger.Infof("⚠️  [SafeFallback] AI didn't output JSON decision, entering safe wait mode")
-
-		cotSummary := jsonPart
-		if len(cotSummary) > 240 {
-			cotSummary = cotSummary[:240] + "..."
-		}
-
-		fallbackDecision := Decision{
-			Symbol:    "ALL",
-			Action:    "wait",
-			Reasoning: fmt.Sprintf("Model didn't output structured JSON decision, entering safe wait; summary: %s", cotSummary),
-		}
-
-		return []Decision{fallbackDecision}, nil
-	}
-
-	jsonContent = compactArrayOpen(jsonContent)
-	jsonContent = fixMissingQuotes(jsonContent)
-
-	if err := validateJSONFormat(jsonContent); err != nil {
-		return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
-	}
-
-	var decisions []Decision
-	if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-		return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
-	}
-
-	return decisions, nil
-}
-
-func fixMissingQuotes(jsonStr string) string {
-	jsonStr = strings.ReplaceAll(jsonStr, "\u201c", "\"")
-	jsonStr = strings.ReplaceAll(jsonStr, "\u201d", "\"")
-	jsonStr = strings.ReplaceAll(jsonStr, "\u2018", "'")
-	jsonStr = strings.ReplaceAll(jsonStr, "\u2019", "'")
-
-	jsonStr = strings.ReplaceAll(jsonStr, "［", "[")
-	jsonStr = strings.ReplaceAll(jsonStr, "］", "]")
-	jsonStr = strings.ReplaceAll(jsonStr, "｛", "{")
-	jsonStr = strings.ReplaceAll(jsonStr, "｝", "}")
-	jsonStr = strings.ReplaceAll(jsonStr, "：", ":")
-	jsonStr = strings.ReplaceAll(jsonStr, "，", ",")
-
-	jsonStr = strings.ReplaceAll(jsonStr, "【", "[")
-	jsonStr = strings.ReplaceAll(jsonStr, "】", "]")
-	jsonStr = strings.ReplaceAll(jsonStr, "〔", "[")
-	jsonStr = strings.ReplaceAll(jsonStr, "〕", "]")
-	jsonStr = strings.ReplaceAll(jsonStr, "、", ",")
-
-	jsonStr = strings.ReplaceAll(jsonStr, "　", " ")
-
-	return jsonStr
-}
-
-func validateJSONFormat(jsonStr string) error {
-	trimmed := strings.TrimSpace(jsonStr)
-
-	if !reArrayHead.MatchString(trimmed) {
-		if strings.HasPrefix(trimmed, "[") && !strings.Contains(trimmed[:min(20, len(trimmed))], "{") {
-			return fmt.Errorf("not a valid decision array (must contain objects {}), actual content: %s", trimmed[:min(50, len(trimmed))])
-		}
-		return fmt.Errorf("JSON must start with [{ (whitespace allowed), actual: %s", trimmed[:min(20, len(trimmed))])
-	}
-
-	if strings.Contains(jsonStr, "~") {
-		return fmt.Errorf("JSON cannot contain range symbol ~, all numbers must be precise single values")
-	}
-
-	for i := 0; i < len(jsonStr)-4; i++ {
-		if jsonStr[i] >= '0' && jsonStr[i] <= '9' &&
-			jsonStr[i+1] == ',' &&
-			jsonStr[i+2] >= '0' && jsonStr[i+2] <= '9' &&
-			jsonStr[i+3] >= '0' && jsonStr[i+3] <= '9' &&
-			jsonStr[i+4] >= '0' && jsonStr[i+4] <= '9' {
-			return fmt.Errorf("JSON numbers cannot contain thousand separator comma, found: %s", jsonStr[i:min(i+10, len(jsonStr))])
-		}
-	}
-
-	return nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func removeInvisibleRunes(s string) string {
-	return reInvisibleRunes.ReplaceAllString(s, "")
-}
-
-func compactArrayOpen(s string) string {
-	return reArrayOpenSpace.ReplaceAllString(strings.TrimSpace(s), "[{")
-}
-
-// ============================================================================
-// Decision Validation
-// ============================================================================
-
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
-	for i, decision := range decisions {
-		if err := validateDecision(&decision, accountEquity, btcEthLeverage, altcoinLeverage, btcEthPosRatio, altcoinPosRatio); err != nil {
-			return fmt.Errorf("decision #%d validation failed: %w", i+1, err)
-		}
-	}
-	return nil
-}
-
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int, btcEthPosRatio, altcoinPosRatio float64) error {
-	validActions := map[string]bool{
-		"open_long":   true,
-		"open_short":  true,
-		"close_long":  true,
-		"close_short": true,
-		"hold":        true,
-		"wait":        true,
-	}
-
-	if !validActions[d.Action] {
-		return fmt.Errorf("invalid action: %s", d.Action)
-	}
-
-	if d.Action == "open_long" || d.Action == "open_short" {
-		maxLeverage := altcoinLeverage
-		posRatio := altcoinPosRatio
-		maxPositionValue := accountEquity * posRatio
-		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			maxLeverage = btcEthLeverage
-			posRatio = btcEthPosRatio
-			maxPositionValue = accountEquity * posRatio
-		}
-
-		if d.Leverage <= 0 {
-			return fmt.Errorf("leverage must be greater than 0: %d", d.Leverage)
-		}
-		if d.Leverage > maxLeverage {
-			logger.Infof("⚠️  [Leverage Fallback] %s leverage exceeded (%dx > %dx), auto-adjusting to limit %dx",
-				d.Symbol, d.Leverage, maxLeverage, maxLeverage)
-			d.Leverage = maxLeverage
-		}
-		if d.PositionSizeUSD <= 0 {
-			return fmt.Errorf("position size must be greater than 0: %.2f", d.PositionSizeUSD)
-		}
-
-		const minPositionSizeGeneral = 12.0
-		const minPositionSizeBTCETH = 60.0
-
-		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			if d.PositionSizeUSD < minPositionSizeBTCETH {
-				return fmt.Errorf("%s opening amount too small (%.2f USDT), must be ≥%.2f USDT", d.Symbol, d.PositionSizeUSD, minPositionSizeBTCETH)
-			}
-		} else {
-			if d.PositionSizeUSD < minPositionSizeGeneral {
-				return fmt.Errorf("opening amount too small (%.2f USDT), must be ≥%.2f USDT", d.PositionSizeUSD, minPositionSizeGeneral)
-			}
-		}
-
-		tolerance := maxPositionValue * 0.01
-		if d.PositionSizeUSD > maxPositionValue+tolerance {
-			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-				return fmt.Errorf("BTC/ETH single coin position value cannot exceed %.0f USDT (%.1fx account equity), actual: %.0f", maxPositionValue, posRatio, d.PositionSizeUSD)
-			} else {
-				return fmt.Errorf("altcoin single coin position value cannot exceed %.0f USDT (%.1fx account equity), actual: %.0f", maxPositionValue, posRatio, d.PositionSizeUSD)
-			}
-		}
-		if d.StopLoss <= 0 || d.TakeProfit <= 0 {
-			return fmt.Errorf("stop loss and take profit must be greater than 0")
-		}
-
-		if d.Action == "open_long" {
-			if d.StopLoss >= d.TakeProfit {
-				return fmt.Errorf("for long positions, stop loss price must be less than take profit price")
-			}
-		} else {
-			if d.StopLoss <= d.TakeProfit {
-				return fmt.Errorf("for short positions, stop loss price must be greater than take profit price")
-			}
-		}
-
-		var entryPrice float64
-		if d.Action == "open_long" {
-			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2
-		} else {
-			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2
-		}
-
-		var riskPercent, rewardPercent, riskRewardRatio float64
-		if d.Action == "open_long" {
-			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
-			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
-		} else {
-			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
-			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
-		}
-
-		if riskRewardRatio < 3.0 {
-			return fmt.Errorf("risk/reward ratio too low (%.2f:1), must be ≥3.0:1 [risk: %.2f%% reward: %.2f%%] [stop loss: %.2f take profit: %.2f]",
-				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
-		}
-	}
-
-	return nil
 }
 
 // ============================================================================

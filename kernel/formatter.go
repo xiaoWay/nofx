@@ -10,49 +10,50 @@ import (
 )
 
 // ============================================================================
-// AI Data Formatter - AI数据格式化器
+// AI Data Formatter
 // ============================================================================
-// 将交易上下文转换为AI友好的格式，确保AI能够100%理解数据
+// Converts trading context into AI-friendly format, ensuring AI fully
+// understands the data regardless of language.
 // ============================================================================
 
-// FormatContextForAI 将交易上下文格式化为AI可理解的文本（包含Schema）
+// FormatContextForAI formats trading context into AI-readable text (including schema)
 func FormatContextForAI(ctx *Context, lang Language) string {
 	var sb strings.Builder
 
-	// 1. 添加Schema说明（让AI理解数据格式）
+	// 1. Add schema description (so AI understands data format)
 	sb.WriteString(GetSchemaPrompt(lang))
 	sb.WriteString("\n---\n\n")
 
-	// 2. 当前状态概览
+	// 2. Current state overview
 	sb.WriteString(formatContextData(ctx, lang))
 
 	return sb.String()
 }
 
-// FormatContextDataOnly 仅格式化上下文数据，不包含Schema（用于已有Schema的场景）
+// FormatContextDataOnly formats context data only, without schema (for use when schema is already present)
 func FormatContextDataOnly(ctx *Context, lang Language) string {
 	return formatContextData(ctx, lang)
 }
 
-// formatContextData 格式化核心数据部分
+// formatContextData formats the core data section
 func formatContextData(ctx *Context, lang Language) string {
 	var sb strings.Builder
 
-	// 1. 当前状态概览
+	// 1. Current state overview
 	if lang == LangChinese {
 		sb.WriteString(formatHeaderZH(ctx))
 	} else {
 		sb.WriteString(formatHeaderEN(ctx))
 	}
 
-	// 3. 账户信息
+	// 3. Account information
 	if lang == LangChinese {
 		sb.WriteString(formatAccountZH(ctx))
 	} else {
 		sb.WriteString(formatAccountEN(ctx))
 	}
 
-	// 4. 历史交易统计
+	// 4. Historical trading statistics
 	if ctx.TradingStats != nil && ctx.TradingStats.TotalTrades > 0 {
 		if lang == LangChinese {
 			sb.WriteString(formatTradingStatsZH(ctx.TradingStats))
@@ -61,7 +62,7 @@ func formatContextData(ctx *Context, lang Language) string {
 		}
 	}
 
-	// 5. 最近交易记录
+	// 5. Recent trade records
 	if len(ctx.RecentOrders) > 0 {
 		if lang == LangChinese {
 			sb.WriteString(formatRecentTradesZH(ctx.RecentOrders))
@@ -70,7 +71,7 @@ func formatContextData(ctx *Context, lang Language) string {
 		}
 	}
 
-	// 5. 当前持仓
+	// 5. Current positions
 	if len(ctx.Positions) > 0 {
 		if lang == LangChinese {
 			sb.WriteString(formatCurrentPositionsZH(ctx))
@@ -79,7 +80,7 @@ func formatContextData(ctx *Context, lang Language) string {
 		}
 	}
 
-	// 6. 候选币种（带市场数据）
+	// 6. Candidate coins (with market data)
 	if len(ctx.CandidateCoins) > 0 {
 		if lang == LangChinese {
 			sb.WriteString(formatCandidateCoinsZH(ctx))
@@ -88,7 +89,7 @@ func formatContextData(ctx *Context, lang Language) string {
 		}
 	}
 
-	// 7. OI排名数据（如果有）
+	// 7. OI ranking data (if available)
 	if ctx.OIRankingData != nil {
 		nofxosLang := nofxos.LangEnglish
 		if lang == LangChinese {
@@ -100,110 +101,110 @@ func formatContextData(ctx *Context, lang Language) string {
 	return sb.String()
 }
 
-// ========== 中文格式化函数 ==========
+// ========== Chinese Formatting Functions ==========
 
-// formatHeaderZH 格式化头部信息（中文）
+// formatHeaderZH formats header information (Chinese)
 func formatHeaderZH(ctx *Context) string {
-	return fmt.Sprintf("# 📊 交易决策请求\n\n时间: %s | 周期: #%d | 运行时长: %d 分钟\n\n",
+	return fmt.Sprintf("# 📊 Trading Decision Request\n\nTime: %s | Cycle: #%d | Runtime: %d minutes\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes)
 }
 
-// formatAccountZH 格式化账户信息（中文）
+// formatAccountZH formats account information (Chinese)
 func formatAccountZH(ctx *Context) string {
 	acc := ctx.Account
 	var sb strings.Builder
 
-	sb.WriteString("## 账户状态\n\n")
-	sb.WriteString(fmt.Sprintf("总权益: %.2f USDT | ", acc.TotalEquity))
-	sb.WriteString(fmt.Sprintf("可用余额: %.2f USDT (%.1f%%) | ", acc.AvailableBalance, (acc.AvailableBalance/acc.TotalEquity)*100))
-	sb.WriteString(fmt.Sprintf("总盈亏: %+.2f%% | ", acc.TotalPnLPct))
-	sb.WriteString(fmt.Sprintf("保证金使用率: %.1f%% | ", acc.MarginUsedPct))
-	sb.WriteString(fmt.Sprintf("持仓数: %d\n\n", acc.PositionCount))
+	sb.WriteString("## Account Status\n\n")
+	sb.WriteString(fmt.Sprintf("Total Equity: %.2f USDT | ", acc.TotalEquity))
+	sb.WriteString(fmt.Sprintf("Available Balance: %.2f USDT (%.1f%%) | ", acc.AvailableBalance, (acc.AvailableBalance/acc.TotalEquity)*100))
+	sb.WriteString(fmt.Sprintf("Total PnL: %+.2f%% | ", acc.TotalPnLPct))
+	sb.WriteString(fmt.Sprintf("Margin Usage: %.1f%% | ", acc.MarginUsedPct))
+	sb.WriteString(fmt.Sprintf("Position Count: %d\n\n", acc.PositionCount))
 
-	// 添加风险提示
+	// Add risk warnings
 	if acc.MarginUsedPct > 70 {
-		sb.WriteString("⚠️ **风险警告**: 保证金使用率 > 70%，处于高风险状态！\n\n")
+		sb.WriteString("⚠️ **Risk Warning**: Margin usage > 70%, in a high-risk state!\n\n")
 	} else if acc.MarginUsedPct > 50 {
-		sb.WriteString("⚠️ **风险提示**: 保证金使用率 > 50%，建议谨慎开仓\n\n")
+		sb.WriteString("⚠️ **Risk Notice**: Margin usage > 50%, open positions with caution\n\n")
 	}
 
 	return sb.String()
 }
 
-// formatTradingStatsZH 格式化历史交易统计（中文）
+// formatTradingStatsZH formats historical trading statistics (Chinese)
 func formatTradingStatsZH(stats *TradingStats) string {
 	var sb strings.Builder
-	sb.WriteString("## 历史交易统计\n\n")
+	sb.WriteString("## Historical Trading Statistics\n\n")
 
-	// 盈亏比计算
+	// Win/loss ratio calculation
 	var winLossRatio float64
 	if stats.AvgLoss > 0 {
 		winLossRatio = stats.AvgWin / stats.AvgLoss
 	}
 
-	// 指标定义说明（去掉胜率，聚焦核心指标）
-	sb.WriteString("**指标说明**:\n")
-	sb.WriteString("- 盈利因子: 总盈利 ÷ 总亏损（>1表示盈利，>1.5为良好，>2为优秀）\n")
-	sb.WriteString("- 夏普比率: (平均收益 - 无风险收益) ÷ 收益标准差（>1良好，>2优秀）\n")
-	sb.WriteString("- 盈亏比: 平均盈利 ÷ 平均亏损（>1.5为良好，>2为优秀）\n")
-	sb.WriteString("- 最大回撤: 资金曲线从峰值到谷底的最大跌幅（<20%为低风险）\n\n")
+	// Metric definitions (focusing on core metrics, excluding win rate)
+	sb.WriteString("**Metric Definitions**:\n")
+	sb.WriteString("- Profit Factor: Total Profit ÷ Total Loss (>1 means profitable, >1.5 good, >2 excellent)\n")
+	sb.WriteString("- Sharpe Ratio: (Avg Return - Risk-free Return) ÷ Std Dev of Returns (>1 good, >2 excellent)\n")
+	sb.WriteString("- Win/Loss Ratio: Avg Win ÷ Avg Loss (>1.5 good, >2 excellent)\n")
+	sb.WriteString("- Max Drawdown: Largest decline of the equity curve from peak to trough (<20% is low risk)\n\n")
 
-	// 数据值
-	sb.WriteString("**当前数据**:\n")
-	sb.WriteString(fmt.Sprintf("- 总交易: %d 笔\n", stats.TotalTrades))
-	sb.WriteString(fmt.Sprintf("- 盈利因子: %.2f\n", stats.ProfitFactor))
-	sb.WriteString(fmt.Sprintf("- 夏普比率: %.2f\n", stats.SharpeRatio))
-	sb.WriteString(fmt.Sprintf("- 盈亏比: %.2f\n", winLossRatio))
-	sb.WriteString(fmt.Sprintf("- 总盈亏: %+.2f USDT\n", stats.TotalPnL))
-	sb.WriteString(fmt.Sprintf("- 平均盈利: +%.2f USDT\n", stats.AvgWin))
-	sb.WriteString(fmt.Sprintf("- 平均亏损: -%.2f USDT\n", stats.AvgLoss))
-	sb.WriteString(fmt.Sprintf("- 最大回撤: %.1f%%\n\n", stats.MaxDrawdownPct))
+	// Data values
+	sb.WriteString("**Current Data**:\n")
+	sb.WriteString(fmt.Sprintf("- Total Trades: %d\n", stats.TotalTrades))
+	sb.WriteString(fmt.Sprintf("- Profit Factor: %.2f\n", stats.ProfitFactor))
+	sb.WriteString(fmt.Sprintf("- Sharpe Ratio: %.2f\n", stats.SharpeRatio))
+	sb.WriteString(fmt.Sprintf("- Win/Loss Ratio: %.2f\n", winLossRatio))
+	sb.WriteString(fmt.Sprintf("- Total PnL: %+.2f USDT\n", stats.TotalPnL))
+	sb.WriteString(fmt.Sprintf("- Avg Win: +%.2f USDT\n", stats.AvgWin))
+	sb.WriteString(fmt.Sprintf("- Avg Loss: -%.2f USDT\n", stats.AvgLoss))
+	sb.WriteString(fmt.Sprintf("- Max Drawdown: %.1f%%\n\n", stats.MaxDrawdownPct))
 
-	// 综合分析和决策建议
-	sb.WriteString("**决策参考**:\n")
+	// Comprehensive analysis and decision guidance
+	sb.WriteString("**Decision Reference**:\n")
 
-	// 根据统计数据给出具体建议
+	// Provide specific recommendations based on statistics
 	if stats.TotalTrades < 10 {
-		sb.WriteString("- 样本量较小（<10笔），统计结果参考意义有限\n")
+		sb.WriteString("- Small sample size (<10 trades), statistics have limited reference value\n")
 	}
 
 	if stats.ProfitFactor >= 1.5 && stats.SharpeRatio >= 1 {
-		sb.WriteString("- 📈 表现良好: 可以维持当前策略风格\n")
+		sb.WriteString("- 📈 Good performance: you can keep the current strategy style\n")
 	} else if stats.ProfitFactor >= 1.0 {
-		sb.WriteString("- 📊 表现正常: 策略可行但有优化空间\n")
+		sb.WriteString("- 📊 Normal performance: strategy is viable but has room for optimization\n")
 	}
 
 	if stats.ProfitFactor < 1.0 {
-		sb.WriteString("- ⚠️ 盈利因子<1: 亏损大于盈利，需要提高盈亏比，优化止盈止损\n")
+		sb.WriteString("- ⚠️ Profit Factor <1: losses exceed profits, improve win/loss ratio and optimize stops/targets\n")
 	}
 
 	if winLossRatio > 0 && winLossRatio < 1.5 {
-		sb.WriteString("- ⚠️ 盈亏比偏低: 建议让利润奔跑，提高止盈目标\n")
+		sb.WriteString("- ⚠️ Low win/loss ratio: let profits run and raise take-profit targets\n")
 	}
 
 	if stats.MaxDrawdownPct > 30 {
-		sb.WriteString("- ⚠️ 最大回撤过高: 建议降低仓位大小控制风险\n")
+		sb.WriteString("- ⚠️ Max drawdown too high: reduce position size to control risk\n")
 	} else if stats.MaxDrawdownPct < 10 {
-		sb.WriteString("- ✅ 回撤控制良好: 风险管理有效\n")
+		sb.WriteString("- ✅ Drawdown well controlled: risk management is effective\n")
 	}
 
 	sb.WriteString("\n")
 	return sb.String()
 }
 
-// formatRecentTradesZH 格式化最近交易（中文）
+// formatRecentTradesZH formats recent trades (Chinese)
 func formatRecentTradesZH(orders []RecentOrder) string {
 	var sb strings.Builder
-	sb.WriteString("## 最近完成的交易\n\n")
+	sb.WriteString("## Recently Closed Trades\n\n")
 
 	for i, order := range orders {
-		// 判断盈亏
-		profitOrLoss := "盈利"
+		// Determine profit or loss
+		profitOrLoss := "Profit"
 		if order.RealizedPnL < 0 {
-			profitOrLoss = "亏损"
+			profitOrLoss = "Loss"
 		}
 
-		sb.WriteString(fmt.Sprintf("%d. %s %s | 进场 %.4f 出场 %.4f | %s: %+.2f USDT (%+.2f%%) | %s → %s (%s)\n",
+		sb.WriteString(fmt.Sprintf("%d. %s %s | Entry %.4f Exit %.4f | %s: %+.2f USDT (%+.2f%%) | %s → %s (%s)\n",
 			i+1,
 			order.Symbol,
 			order.Side,
@@ -222,40 +223,40 @@ func formatRecentTradesZH(orders []RecentOrder) string {
 	return sb.String()
 }
 
-// formatCurrentPositionsZH 格式化当前持仓（中文）
+// formatCurrentPositionsZH formats current positions (Chinese)
 func formatCurrentPositionsZH(ctx *Context) string {
 	var sb strings.Builder
-	sb.WriteString("## 当前持仓\n\n")
+	sb.WriteString("## Current Positions\n\n")
 
 	for i, pos := range ctx.Positions {
-		// 计算回撤
+		// Calculate drawdown
 		drawdown := pos.UnrealizedPnLPct - pos.PeakPnLPct
 
 		sb.WriteString(fmt.Sprintf("%d. %s %s | ", i+1, pos.Symbol, strings.ToUpper(pos.Side)))
-		sb.WriteString(fmt.Sprintf("进场 %.4f 当前 %.4f | ", pos.EntryPrice, pos.MarkPrice))
-		sb.WriteString(fmt.Sprintf("数量 %.4f | ", pos.Quantity))
-		sb.WriteString(fmt.Sprintf("仓位价值 %.2f USDT | ", pos.Quantity*pos.MarkPrice))
-		sb.WriteString(fmt.Sprintf("盈亏 %+.2f%% | ", pos.UnrealizedPnLPct))
-		sb.WriteString(fmt.Sprintf("盈亏金额 %+.2f USDT | ", pos.UnrealizedPnL))
-		sb.WriteString(fmt.Sprintf("峰值盈亏 %.2f%% | ", pos.PeakPnLPct))
-		sb.WriteString(fmt.Sprintf("杠杆 %dx | ", pos.Leverage))
-		sb.WriteString(fmt.Sprintf("保证金 %.0f USDT | ", pos.MarginUsed))
-		sb.WriteString(fmt.Sprintf("强平价 %.4f\n", pos.LiquidationPrice))
+		sb.WriteString(fmt.Sprintf("Entry %.4f Current %.4f | ", pos.EntryPrice, pos.MarkPrice))
+		sb.WriteString(fmt.Sprintf("Quantity %.4f | ", pos.Quantity))
+		sb.WriteString(fmt.Sprintf("Position Value %.2f USDT | ", pos.Quantity*pos.MarkPrice))
+		sb.WriteString(fmt.Sprintf("PnL %+.2f%% | ", pos.UnrealizedPnLPct))
+		sb.WriteString(fmt.Sprintf("PnL Amount %+.2f USDT | ", pos.UnrealizedPnL))
+		sb.WriteString(fmt.Sprintf("Peak PnL %.2f%% | ", pos.PeakPnLPct))
+		sb.WriteString(fmt.Sprintf("Leverage %dx | ", pos.Leverage))
+		sb.WriteString(fmt.Sprintf("Margin %.0f USDT | ", pos.MarginUsed))
+		sb.WriteString(fmt.Sprintf("Liq Price %.4f\n", pos.LiquidationPrice))
 
-		// 添加分析提示
+		// Add analysis hints
 		if drawdown < -0.30*pos.PeakPnLPct && pos.PeakPnLPct > 0.02 {
-			sb.WriteString(fmt.Sprintf("   ⚠️ **止盈提示**: 当前盈亏从峰值 %.2f%% 回撤到 %.2f%%，回撤幅度 %.2f%%，建议考虑止盈\n",
+			sb.WriteString(fmt.Sprintf("   ⚠️ **Take-Profit Hint**: Current PnL retraced from peak %.2f%% to %.2f%%, drawdown %.2f%%, consider taking profit\n",
 				pos.PeakPnLPct, pos.UnrealizedPnLPct, (drawdown/pos.PeakPnLPct)*100))
 		}
 
 		if pos.UnrealizedPnLPct < -4.0 {
-			sb.WriteString("   ⚠️ **止损提示**: 亏损接近-5%止损线，建议考虑止损\n")
+			sb.WriteString("   ⚠️ **Stop-Loss Hint**: Loss approaching the -5% stop-loss line, consider stopping out\n")
 		}
 
-		// 显示当前价格（如果有市场数据）
+		// Show current price (if market data available)
 		if ctx.MarketDataMap != nil {
 			if mdata, ok := ctx.MarketDataMap[pos.Symbol]; ok {
-				sb.WriteString(fmt.Sprintf("   📈 当前价格: %.4f\n", mdata.CurrentPrice))
+				sb.WriteString(fmt.Sprintf("   📈 Current Price: %.4f\n", mdata.CurrentPrice))
 			}
 		}
 
@@ -265,48 +266,48 @@ func formatCurrentPositionsZH(ctx *Context) string {
 	return sb.String()
 }
 
-// formatCandidateCoinsZH 格式化候选币种（中文）
+// formatCandidateCoinsZH formats candidate coins (Chinese)
 func formatCandidateCoinsZH(ctx *Context) string {
 	var sb strings.Builder
-	sb.WriteString("## 候选币种\n\n")
+	sb.WriteString("## Candidate Coins\n\n")
 
 	for i, coin := range ctx.CandidateCoins {
 		sb.WriteString(fmt.Sprintf("### %d. %s\n\n", i+1, coin.Symbol))
 
-		// 当前价格
+		// Current price
 		if ctx.MarketDataMap != nil {
 			if mdata, ok := ctx.MarketDataMap[coin.Symbol]; ok {
-				sb.WriteString(fmt.Sprintf("当前价格: %.4f\n\n", mdata.CurrentPrice))
+				sb.WriteString(fmt.Sprintf("Current Price: %.4f\n\n", mdata.CurrentPrice))
 
-				// K线数据（多时间框架）
+				// Kline data (multi-timeframe)
 				if mdata.TimeframeData != nil {
 					sb.WriteString(formatKlineDataZH(coin.Symbol, mdata.TimeframeData, ctx.Timeframes))
 				}
 			}
 		}
 
-		// OI数据（如果有）
+		// OI data (if available)
 		if ctx.OITopDataMap != nil {
 			if oiData, ok := ctx.OITopDataMap[coin.Symbol]; ok {
-				sb.WriteString(fmt.Sprintf("**持仓量变化**: OI排名 #%d | 变化 %+.2f%% (%+.2fM USDT) | 价格变化 %+.2f%%\n\n",
+				sb.WriteString(fmt.Sprintf("**OI Change**: OI Rank #%d | Change %+.2f%% (%+.2fM USDT) | Price Change %+.2f%%\n\n",
 					oiData.Rank,
 					oiData.OIDeltaPercent,
 					oiData.OIDeltaValue/1_000_000,
 					oiData.PriceDeltaPercent,
 				))
 
-				// OI解读
-				oiChange := "增加"
+				// OI interpretation
+				oiChange := "increase"
 				if oiData.OIDeltaPercent < 0 {
-					oiChange = "减少"
+					oiChange = "decrease"
 				}
-				priceChange := "上涨"
+				priceChange := "up"
 				if oiData.PriceDeltaPercent < 0 {
-					priceChange = "下跌"
+					priceChange = "down"
 				}
 
 				interpretation := getOIInterpretationZH(oiChange, priceChange)
-				sb.WriteString(fmt.Sprintf("**市场解读**: %s\n\n", interpretation))
+				sb.WriteString(fmt.Sprintf("**Market Interpretation**: %s\n\n", interpretation))
 			}
 		}
 	}
@@ -314,17 +315,17 @@ func formatCandidateCoinsZH(ctx *Context) string {
 	return sb.String()
 }
 
-// formatKlineDataZH 格式化K线数据（中文）
+// formatKlineDataZH formats kline data (Chinese)
 func formatKlineDataZH(symbol string, tfData map[string]*market.TimeframeSeriesData, timeframes []string) string {
 	var sb strings.Builder
 
 	for _, tf := range timeframes {
 		if data, ok := tfData[tf]; ok && len(data.Klines) > 0 {
-			sb.WriteString(fmt.Sprintf("#### %s 时间框架 (从旧到新)\n\n", tf))
+			sb.WriteString(fmt.Sprintf("#### %s Timeframe (oldest to newest)\n\n", tf))
 			sb.WriteString("```\n")
-			sb.WriteString("时间(UTC)      开盘      最高      最低      收盘      成交量\n")
+			sb.WriteString("Time(UTC)      Open      High      Low       Close     Volume\n")
 
-			// 只显示最近30根K线
+			// Only show the latest 30 klines
 			startIdx := 0
 			if len(data.Klines) > 30 {
 				startIdx = len(data.Klines) - 30
@@ -343,9 +344,9 @@ func formatKlineDataZH(symbol string, tfData map[string]*market.TimeframeSeriesD
 				))
 			}
 
-			// 标记最后一根K线
+			// Mark the last kline
 			if len(data.Klines) > 0 {
-				sb.WriteString("    <- 当前\n")
+				sb.WriteString("    <- current\n")
 			}
 
 			sb.WriteString("```\n\n")
@@ -355,29 +356,28 @@ func formatKlineDataZH(symbol string, tfData map[string]*market.TimeframeSeriesD
 	return sb.String()
 }
 
-
-// getOIInterpretationZH 获取OI变化解读（中文）
+// getOIInterpretationZH returns OI change interpretation (Chinese)
 func getOIInterpretationZH(oiChange, priceChange string) string {
-	if oiChange == "增加" && priceChange == "上涨" {
+	if oiChange == "increase" && priceChange == "up" {
 		return OIInterpretation.OIUp_PriceUp.ZH
-	} else if oiChange == "增加" && priceChange == "下跌" {
+	} else if oiChange == "increase" && priceChange == "down" {
 		return OIInterpretation.OIUp_PriceDown.ZH
-	} else if oiChange == "减少" && priceChange == "上涨" {
+	} else if oiChange == "decrease" && priceChange == "up" {
 		return OIInterpretation.OIDown_PriceUp.ZH
 	} else {
 		return OIInterpretation.OIDown_PriceDown.ZH
 	}
 }
 
-// ========== 英文格式化函数 ==========
+// ========== English Formatting Functions ==========
 
-// formatHeaderEN 格式化头部信息（英文）
+// formatHeaderEN formats header information (English)
 func formatHeaderEN(ctx *Context) string {
 	return fmt.Sprintf("# 📊 Trading Decision Request\n\nTime: %s | Period: #%d | Runtime: %d minutes\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes)
 }
 
-// formatAccountEN 格式化账户信息（英文）
+// formatAccountEN formats account information (English)
 func formatAccountEN(ctx *Context) string {
 	acc := ctx.Account
 	var sb strings.Builder
@@ -399,7 +399,7 @@ func formatAccountEN(ctx *Context) string {
 	return sb.String()
 }
 
-// formatTradingStatsEN 格式化历史交易统计（英文）
+// formatTradingStatsEN formats historical trading statistics (English)
 func formatTradingStatsEN(stats *TradingStats) string {
 	var sb strings.Builder
 	sb.WriteString("## Historical Trading Statistics\n\n")
@@ -460,7 +460,7 @@ func formatTradingStatsEN(stats *TradingStats) string {
 	return sb.String()
 }
 
-// formatRecentTradesEN 格式化最近交易（英文）
+// formatRecentTradesEN formats recent trades (English)
 func formatRecentTradesEN(orders []RecentOrder) string {
 	var sb strings.Builder
 	sb.WriteString("## Recent Completed Trades\n\n")
@@ -490,7 +490,7 @@ func formatRecentTradesEN(orders []RecentOrder) string {
 	return sb.String()
 }
 
-// formatCurrentPositionsEN 格式化当前持仓（英文）
+// formatCurrentPositionsEN formats current positions (English)
 func formatCurrentPositionsEN(ctx *Context) string {
 	var sb strings.Builder
 	sb.WriteString("## Current Positions\n\n")
@@ -531,7 +531,7 @@ func formatCurrentPositionsEN(ctx *Context) string {
 	return sb.String()
 }
 
-// formatCandidateCoinsEN 格式化候选币种（英文）
+// formatCandidateCoinsEN formats candidate coins (English)
 func formatCandidateCoinsEN(ctx *Context) string {
 	var sb strings.Builder
 	sb.WriteString("## Candidate Coins\n\n")
@@ -576,7 +576,7 @@ func formatCandidateCoinsEN(ctx *Context) string {
 	return sb.String()
 }
 
-// formatKlineDataEN 格式化K线数据（英文）
+// formatKlineDataEN formats kline data (English)
 func formatKlineDataEN(symbol string, tfData map[string]*market.TimeframeSeriesData, timeframes []string) string {
 	var sb strings.Builder
 
@@ -620,8 +620,7 @@ func formatKlineDataEN(symbol string, tfData map[string]*market.TimeframeSeriesD
 	return sb.String()
 }
 
-
-// getOIInterpretationEN 获取OI变化解读（英文）
+// getOIInterpretationEN returns OI change interpretation (English)
 func getOIInterpretationEN(oiChange, priceChange string) string {
 	if oiChange == "increase" && priceChange == "up" {
 		return OIInterpretation.OIUp_PriceUp.EN

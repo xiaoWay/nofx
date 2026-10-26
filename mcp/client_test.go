@@ -27,16 +27,16 @@ func TestNewClient_Default(t *testing.T) {
 		t.Error("MaxTokens should be positive")
 	}
 
-	if c.logger == nil {
-		t.Error("logger should not be nil")
+	if c.Log == nil {
+		t.Error("Log should not be nil")
 	}
 
-	if c.httpClient == nil {
-		t.Error("httpClient should not be nil")
+	if c.HTTPClient == nil {
+		t.Error("HTTPClient should not be nil")
 	}
 
-	if c.hooks == nil {
-		t.Error("hooks should not be nil")
+	if c.Hooks == nil {
+		t.Error("Hooks should not be nil")
 	}
 }
 
@@ -54,12 +54,12 @@ func TestNewClient_WithOptions(t *testing.T) {
 
 	c := client.(*Client)
 
-	if c.logger != mockLogger {
-		t.Error("logger should be set from option")
+	if c.Log != mockLogger {
+		t.Error("Log should be set from option")
 	}
 
-	if c.httpClient != mockHTTP {
-		t.Error("httpClient should be set from option")
+	if c.HTTPClient != mockHTTP {
+		t.Error("HTTPClient should be set from option")
 	}
 
 	if c.MaxTokens != 4000 {
@@ -174,7 +174,7 @@ func TestClient_Retry_Success(t *testing.T) {
 		WithMaxRetries(3),
 	)
 
-	// Since our client uses hooks.call, need special handling
+	// Since our client uses Hooks.Call, need special handling
 	// Here we test that CallWithMessages will invoke retry logic
 	c := client.(*Client)
 
@@ -242,7 +242,7 @@ func TestClient_BuildMCPRequestBody(t *testing.T) {
 	client := NewClient()
 	c := client.(*Client)
 
-	body := c.buildMCPRequestBody("system prompt", "user prompt")
+	body := c.BuildMCPRequestBody("system prompt", "user prompt")
 
 	if body == nil {
 		t.Fatal("body should not be nil")
@@ -267,6 +267,28 @@ func TestClient_BuildMCPRequestBody(t *testing.T) {
 
 	if messages[1]["role"] != "user" {
 		t.Error("second message should be user")
+	}
+}
+
+func TestModelSupportsCustomTemperature(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "gpt-6", want: false},
+		{model: "gpt-6-astra", want: false},
+		{model: "gpt-5.6", want: false},
+		{model: "o4-mini", want: false},
+		{model: "gpt-4o", want: true},
+		{model: "deepseek-v4-pro", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := modelSupportsCustomTemperature(tt.model); got != tt.want {
+				t.Fatalf("modelSupportsCustomTemperature(%q) = %v, want %v", tt.model, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -300,7 +322,7 @@ func TestClient_BuildUrl(t *testing.T) {
 			)
 			c := client.(*Client)
 
-			url := c.buildUrl()
+			url := c.BuildUrl()
 			if url != tt.expected {
 				t.Errorf("expected '%s', got '%s'", tt.expected, url)
 			}
@@ -313,7 +335,7 @@ func TestClient_SetAuthHeader(t *testing.T) {
 	c := client.(*Client)
 
 	headers := make(http.Header)
-	c.setAuthHeader(headers)
+	c.SetAuthHeader(headers)
 
 	authHeader := headers.Get("Authorization")
 	if authHeader != "Bearer test-api-key" {
@@ -346,6 +368,11 @@ func TestClient_IsRetryableError(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "upstream empty output",
+			err:      errors.New(`API returned error (status 429): {"error":{"code":"upstream_empty_output","message":"Upstream model returned empty output.","type":"rate_limit_error"}}`),
+			expected: true,
+		},
+		{
 			name:     "normal error",
 			err:      errors.New("bad request"),
 			expected: false,
@@ -359,7 +386,7 @@ func TestClient_IsRetryableError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := c.isRetryableError(tt.err)
+			result := c.IsRetryableError(tt.err)
 			if result != tt.expected {
 				t.Errorf("expected %v, got %v", tt.expected, result)
 			}
@@ -378,8 +405,8 @@ func TestClient_SetTimeout(t *testing.T) {
 	client.SetTimeout(newTimeout)
 
 	c := client.(*Client)
-	if c.httpClient.Timeout != newTimeout {
-		t.Errorf("expected timeout %v, got %v", newTimeout, c.httpClient.Timeout)
+	if c.HTTPClient.Timeout != newTimeout {
+		t.Errorf("expected timeout %v, got %v", newTimeout, c.HTTPClient.Timeout)
 	}
 }
 
